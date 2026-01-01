@@ -4,6 +4,18 @@ All notable changes to the LocalServer test environment will be documented in th
 
 ---
 
+## [1.2.0] - 2026-01-01
+
+### Added
+- **Production mode**: Replicate production server experience
+  - `scripts/production-mode.bat` - Switch to production settings + sync configs from MCC
+  - `scripts/test-mode.bat` - Switch back to test settings
+  - `server.properties.production` - Normal world, mobs enabled, higher view distance
+  - `server.properties.test` - Superflat, peaceful, optimized for quick testing
+  - Syncs `config/` folder from MCC for production-like configs
+
+---
+
 ## [1.1.0] - 2026-01-01
 
 ### Added

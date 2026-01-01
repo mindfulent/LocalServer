@@ -1,0 +1,43 @@
+#Minecraft server properties
+#Production-like settings for LocalServer testing
+
+# === GAMEPLAY (matches production) ===
+gamemode=creative
+force-gamemode=true
+difficulty=normal
+pvp=false
+allow-flight=true
+spawn-protection=0
+enable-command-block=true
+
+# === WORLD (normal generation, not superflat) ===
+level-name=world-production
+level-type=minecraft\:normal
+generate-structures=true
+
+# === MOBS (enabled for production-like testing) ===
+spawn-monsters=true
+spawn-animals=true
+spawn-npcs=true
+
+# === PERFORMANCE (reduced from production 32 for local testing) ===
+view-distance=12
+simulation-distance=10
+max-players=4
+max-tick-time=120000
+
+# === NETWORK (localhost only) ===
+server-ip=127.0.0.1
+server-port=25565
+online-mode=false
+network-compression-threshold=256
+
+# === RCON ===
+enable-rcon=true
+rcon.password=testpassword
+rcon.port=25575
+
+# === MISC ===
+motd=\u00A76MCC Test Server \u00A77[PRODUCTION MODE]
+white-list=false
+enable-query=false
