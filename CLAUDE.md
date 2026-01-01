@@ -6,13 +6,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Local Minecraft 1.21.1 Fabric test server for Windows. Used to validate MCC modpack changes before deploying to production (Bloom.host).
 
+## Server Manager (server-config.py)
+
+Standalone Python script for managing the local test server. Provides an interactive menu and CLI commands.
+
+```bash
+# Interactive menu (recommended)
+python server-config.py
+
+# CLI commands
+python server-config.py start              # Start server with packwiz sync
+python server-config.py start --vanilla    # Start without mods
+python server-config.py stop               # Stop via RCON
+python server-config.py mode production    # Switch to production mode
+python server-config.py mode test          # Switch to test mode
+python server-config.py download-world     # Sync world from Bloom.host
+python server-config.py reset-world test   # Delete test world
+python server-config.py clear-mods         # Remove mods (keep Fabric API)
+python server-config.py rcon "say hello"   # Send RCON command
+python server-config.py status             # Show current state
+```
+
+**Setup:** Copy `.env.example` to `.env` and fill in SFTP credentials for world sync.
+
 ## Testing Modes
 
-| Mode | Script | Use Case |
-|------|--------|----------|
-| Development | `start.bat` | Test latest MCC with packwiz sync |
-| Production | `scripts/production-mode.bat` | Replicate production experience |
-| Vanilla | `start-vanilla.bat` | Test without mods |
+| Mode | Script/Command | Use Case |
+|------|----------------|----------|
+| Development | `python server-config.py start` | Test latest MCC with packwiz sync |
+| Production | `python server-config.py mode production` | Replicate production experience |
+| Vanilla | `python server-config.py start --vanilla` | Test without mods |
 | Version Testing | `scripts/test-version.bat` | Test specific MCC version tags |
 | Release Validation | `scripts/validate-release.ps1` | Test exact mrpack artifact |
 
@@ -21,16 +44,19 @@ See `docs/TESTING-WORKFLOW.md` for detailed usage.
 ## Quick Start
 
 ```bash
+# Interactive menu (easiest)
+python server-config.py
+
 # Development mode (most common)
-cd ../MCC && ./packwiz.exe serve   # Terminal 1
-./start.bat                         # Terminal 2
+cd ../MCC && ./packwiz.exe serve       # Terminal 1
+python server-config.py start           # Terminal 2
 
 # Production mode (realistic testing)
-scripts/production-mode.bat         # Switch settings + sync configs
-start.bat                           # Start server
+python server-config.py mode production  # Switch settings + sync configs
+python server-config.py start            # Start server
 
 # Test specific version
-scripts/test-version.bat            # Interactive: select version tag
+scripts/test-version.bat                 # Interactive: select version tag
 ```
 
 Connect: `localhost:25565`
@@ -56,18 +82,16 @@ Connect: `localhost:25565`
 
 ```
 LocalServer/
+├── server-config.py             # Server manager (interactive menu + CLI)
+├── .env.example                 # SFTP credentials template
 ├── start.bat                    # Dev mode with packwiz sync
 ├── start-vanilla.bat            # No mods, no packwiz
 ├── server.properties.test       # Test settings (superflat, peaceful)
 ├── server.properties.production # Production settings (normal world)
 ├── scripts/
-│   ├── production-mode.bat      # Switch to production + sync configs
-│   ├── test-mode.bat            # Switch back to test mode
 │   ├── test-version.bat         # Test specific MCC version
 │   ├── validate-release.ps1     # Download + test mrpack
-│   ├── clear-mods.bat           # Remove mods (keep Fabric API)
-│   ├── start-test-env.bat       # All-in-one launcher
-│   └── sync-world.bat           # Download production world data
+│   └── start-test-env.bat       # All-in-one launcher
 └── docs/
     ├── TESTING-WORKFLOW.md      # Testing mode documentation
     └── LOCAL-GUIDE.md.txt       # Comprehensive setup guide
@@ -83,15 +107,17 @@ LocalServer/
 Download production world data from Bloom.host for realistic local testing:
 
 ```bash
-# Quick method (from LocalServer)
-scripts\sync-world.bat
+# Via interactive menu
+python server-config.py
+# Select option 5: Download Production World
 
-# Or via MCC server-config.py
-cd ../MCC
+# Via CLI
 python server-config.py download-world             # Interactive
 python server-config.py download-world -y          # Non-interactive
 python server-config.py download-world --no-backup # Skip local backup
 ```
+
+**Requirements:** Configure `.env` with SFTP credentials (see `.env.example`).
 
 **What it does:**
 - Downloads `/world/`, `/world_nether/`, `/world_the_end/` from production
