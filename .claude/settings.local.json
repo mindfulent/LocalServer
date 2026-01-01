@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(java -version:*)",
+      "Bash(where packwiz:*)",
+      "Bash(where:*)",
+      "Bash(reg query \"HKLM\\\\SOFTWARE\\\\JavaSoft\\\\Java Development Kit\")",
+      "Bash(\"C:/Users/slash/AppData/Roaming/PrismLauncher/java/java-runtime-delta/bin/java.exe\" -version)"
+    ]
+  }
+}

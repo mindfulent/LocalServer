@@ -1,0 +1,26 @@
+# Minecraft server generated files
+world-test/
+world-test_nether/
+world-test_the_end/
+logs/
+crash-reports/
+libraries/
+versions/
+.fabric/
+mods/
+
+# Server runtime files
+*.jar
+banned-ips.json
+banned-players.json
+ops.json
+whitelist.json
+usercache.json
+
+# Keep these tracked
+!packwiz-installer-bootstrap.jar
+!fabric-server-launch.jar
+
+# Actually, don't track large JARs - users should download fresh
+packwiz-installer-bootstrap.jar
+fabric-server-launch.jar

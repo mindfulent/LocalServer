@@ -1,0 +1,710 @@
+# Local Test Environment for Minecraft 1.21.1 Fabric Multiplayer
+
+A comprehensive guide for setting up a localhost test server on Windows to validate MCC modpack changes before deploying to production (Bloom.host).
+
+---
+
+## Table of Contents
+
+1. [Overview & Architecture](#overview--architecture)
+2. [Prerequisites](#prerequisites)
+3. [Method 1: Native Windows Setup (Recommended)](#method-1-native-windows-setup-recommended)
+4. [Method 2: Docker-Based Setup](#method-2-docker-based-setup)
+5. [RAM & Resource Management](#ram--resource-management)
+6. [Integration with Packwiz Workflow](#integration-with-packwiz-workflow)
+7. [Automation Scripts](#automation-scripts)
+8. [Testing Scenarios](#testing-scenarios)
+9. [Troubleshooting](#troubleshooting)
+
+---
+
+## Overview & Architecture
+
+### Why a Local Test Environment?
+
+Running client + server on the same Windows machine enables:
+- **Rapid iteration**: Test mod changes in seconds vs. uploading to Bloom.host
+- **Isolation**: Break things without affecting production
+- **Debugging**: Full access to server logs and crash reports
+- **Offline development**: Work without internet dependency
+
+### Recommended Directory Structure
+
+```
+C:\Users\slash\Projects\
+├── MCC/                           # Your existing modpack source (Packwiz)
+│   ├── pack.toml
+│   ├── mods/
+│   └── overrides/
+├── mc-test-server/                # Local test server (NEW)
+│   ├── start.bat
+│   ├── mods/                      # Server-side mods only
+│   ├── config/
+│   ├── world-test/                # Disposable test world
+│   ├── logs/
+│   └── server.properties
+└── mc-test-scripts/               # Automation scripts (NEW)
+    ├── sync-mods.ps1
+    ├── start-test-env.bat
+    └── reset-world.bat
+```
+
+---
+
+## Prerequisites
+
+### Java 21 (Required for 1.21.1)
+
+Minecraft 1.20.5+ requires Java 21. Verify or install:
+
+```powershell
+# Check current version
+java -version
+
+# If not Java 21, download from Adoptium
+# https://adoptium.net/temurin/releases/?version=21
+```
+
+**Recommended**: Eclipse Temurin JDK 21 (not JRE—you want the full JDK for debugging).
+
+After installation, verify path:
+```powershell
+where java
+# Should show: C:\Program Files\Eclipse Adoptium\jdk-21.x.x-hotspot\bin\java.exe
+```
+
+### Packwiz (You Already Have This)
+
+Verify it's in your PATH:
+```powershell
+packwiz --version
+```
+
+### Prism Launcher Instance
+
+You'll need a Prism instance configured for your MCC modpack to act as the test client.
+
+---
+
+## Method 1: Native Windows Setup (Recommended)
+
+This approach runs the server directly on Windows—simpler and faster than Docker.
+
+### Step 1: Create Server Directory
+
+```powershell
+# Create test server directory
+mkdir C:\Users\slash\Projects\mc-test-server
+cd C:\Users\slash\Projects\mc-test-server
+```
+
+### Step 2: Download Fabric Server Launcher
+
+**Option A: Fabric Installer (GUI)**
+1. Visit https://fabricmc.net/use/server/
+2. Select Minecraft 1.21.1, latest Loader
+3. Download "Executable Server (.jar)"
+4. Save as `fabric-server-launch.jar` in your server directory
+
+**Option B: Command Line**
+```powershell
+# Download the Fabric server launcher directly
+Invoke-WebRequest -Uri "https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.16.9/1.0.1/server/jar" -OutFile "fabric-server-launch.jar"
+```
+
+### Step 3: Create Start Script with Optimized Flags
+
+Create `start.bat`:
+
+```batch
+@echo off
+title MCC Test Server - 1.21.1 Fabric
+echo Starting MCC Test Server...
+echo.
+
+:: Optimized JVM flags for local testing (4GB allocation)
+:: Reduced from production 12GB since client also needs RAM
+java -Xms4G -Xmx4G ^
+  -XX:+UseG1GC ^
+  -XX:+ParallelRefProcEnabled ^
+  -XX:MaxGCPauseMillis=200 ^
+  -XX:+UnlockExperimentalVMOptions ^
+  -XX:+DisableExplicitGC ^
+  -XX:+AlwaysPreTouch ^
+  -XX:G1NewSizePercent=30 ^
+  -XX:G1MaxNewSizePercent=40 ^
+  -XX:G1HeapRegionSize=8M ^
+  -XX:G1ReservePercent=20 ^
+  -XX:G1HeapWastePercent=5 ^
+  -XX:G1MixedGCCountTarget=4 ^
+  -XX:InitiatingHeapOccupancyPercent=15 ^
+  -XX:G1MixedGCLiveThresholdPercent=90 ^
+  -XX:G1RSetUpdatingPauseTimePercent=5 ^
+  -XX:SurvivorRatio=32 ^
+  -XX:+PerfDisableSharedMem ^
+  -XX:MaxTenuringThreshold=1 ^
+  -jar fabric-server-launch.jar nogui
+
+pause
+```
+
+### Step 4: First Launch & EULA
+
+```powershell
+# First run - will create eula.txt and exit
+.\start.bat
+```
+
+Edit `eula.txt`:
+```properties
+eula=true
+```
+
+### Step 5: Configure server.properties for Local Testing
+
+Create/edit `server.properties`:
+
+```properties
+# === LOCAL TEST SERVER CONFIGURATION ===
+# Optimized for single-player testing on same machine
+
+# Network (localhost only)
+server-ip=127.0.0.1
+server-port=25565
+online-mode=false
+enable-query=false
+enable-rcon=true
+rcon.password=testpassword
+rcon.port=25575
+
+# Performance (reduced for shared machine)
+view-distance=8
+simulation-distance=6
+max-players=2
+network-compression-threshold=256
+max-tick-time=120000
+
+# World (disposable test world)
+level-name=world-test
+level-type=minecraft:flat
+generate-structures=false
+spawn-protection=0
+
+# Gameplay (creative for testing)
+gamemode=creative
+difficulty=peaceful
+pvp=false
+allow-flight=true
+enable-command-block=true
+force-gamemode=true
+
+# Misc
+motd=\u00A7aMCC Test Server \u00A77[LOCAL]
+white-list=false
+spawn-npcs=false
+spawn-animals=false
+spawn-monsters=false
+```
+
+**Key differences from production:**
+- `online-mode=false`: Skip authentication for faster testing
+- `level-type=minecraft:flat`: Fast world gen, clean testing surface
+- `view-distance=8`: Reduced to share RAM with client
+- `spawn-monsters=false`: No distractions during testing
+- `rcon.password`: Enables remote console commands from scripts
+
+### Step 6: Install Server-Side Mods
+
+You have two approaches:
+
+**Option A: Manual Sync from Packwiz**
+```powershell
+# Export and extract server mods
+cd C:\Users\slash\Projects\MCC
+packwiz modrinth export
+
+# Use mrpack-install to extract server-side mods
+mrpack-install .\MCC-x.x.x.mrpack --server-dir C:\Users\slash\Projects\mc-test-server
+```
+
+**Option B: Use packwiz-installer (Recommended for Auto-Updates)**
+1. Download `packwiz-installer-bootstrap.jar` from https://github.com/packwiz/packwiz-installer-bootstrap/releases
+2. Place in server directory
+3. Modify `start.bat` to run installer before server:
+
+```batch
+@echo off
+title MCC Test Server - 1.21.1 Fabric
+
+:: Update mods from local packwiz serve
+echo Updating mods from packwiz...
+java -jar packwiz-installer-bootstrap.jar -g -s server http://localhost:8080/pack.toml
+
+echo Starting server...
+java -Xms4G -Xmx4G ^
+  [... rest of flags ...] ^
+  -jar fabric-server-launch.jar nogui
+
+pause
+```
+
+This requires running `packwiz serve` in your MCC directory before starting the server.
+
+### Step 7: Connect from Client
+
+1. Launch your MCC instance in Prism Launcher
+2. Go to **Multiplayer** → **Direct Connect**
+3. Enter: `localhost` or `127.0.0.1`
+4. Connect!
+
+---
+
+## Method 2: Docker-Based Setup
+
+Docker provides better isolation and reproducibility, useful for CI/CD testing.
+
+### Step 1: Install Docker Desktop
+
+Download from https://www.docker.com/products/docker-desktop/
+
+### Step 2: Create docker-compose.yml
+
+```yaml
+version: "3.8"
+
+services:
+  mc-test:
+    image: itzg/minecraft-server:java21
+    container_name: mcc-test-server
+    ports:
+      - "25565:25565"
+      - "25575:25575"  # RCON
+    environment:
+      EULA: "TRUE"
+      TYPE: "FABRIC"
+      VERSION: "1.21.1"
+      FABRIC_LOADER_VERSION: "0.16.9"
+      
+      # Memory (container-allocated)
+      MEMORY: "4G"
+      
+      # Packwiz integration
+      PACKWIZ_URL: "http://host.docker.internal:8080/pack.toml"
+      
+      # Server properties
+      ONLINE_MODE: "false"
+      LEVEL_TYPE: "minecraft:flat"
+      VIEW_DISTANCE: 8
+      SIMULATION_DISTANCE: 6
+      GAMEMODE: "creative"
+      DIFFICULTY: "peaceful"
+      SPAWN_MONSTERS: "false"
+      SPAWN_ANIMALS: "false"
+      MOTD: "§aMCC Test Server §7[DOCKER]"
+      ENABLE_RCON: "true"
+      RCON_PASSWORD: "testpassword"
+      
+    volumes:
+      - ./data:/data
+      - ./mods:/mods:ro  # Mount local mods directory (read-only)
+    stdin_open: true
+    tty: true
+    restart: "no"
+```
+
+### Step 3: Usage
+
+```powershell
+# Start packwiz serve in one terminal
+cd C:\Users\slash\Projects\MCC
+packwiz serve
+
+# In another terminal, start Docker container
+cd C:\Users\slash\Projects\mc-test-server
+docker-compose up
+
+# Stop
+docker-compose down
+
+# Reset (delete world data)
+docker-compose down -v
+```
+
+**Pros of Docker:**
+- Clean environment every time
+- Easy reset with `docker-compose down -v`
+- Matches itzg's docker image used by many hosts
+
+**Cons:**
+- Slightly more complex setup
+- Docker Desktop resource overhead
+- Network latency (minor)
+
+---
+
+## RAM & Resource Management
+
+### Splitting RAM: Client + Server on Same Machine
+
+| System RAM | Server Allocation | Client Allocation | OS/Other |
+|------------|-------------------|-------------------|----------|
+| 16 GB      | 4 GB              | 4 GB              | 8 GB     |
+| 32 GB      | 6 GB              | 6 GB              | 20 GB    |
+| 64 GB      | 8 GB              | 8 GB              | 48 GB    |
+
+**Critical rules:**
+1. **Never allocate > 60% of total RAM** to Minecraft (both client + server combined)
+2. **Set `-Xms` equal to `-Xmx`** (Aikar's recommendation)
+3. **Leave 2-4 GB minimum for Windows and other apps**
+
+### Monitoring RAM Usage
+
+**Server-side (in console):**
+```
+/spark health
+```
+
+**Client-side:**
+- Press F3 → Look for "Mem:" line
+- Or use Spark mod: `/sparkc health`
+
+### Signs You Need More RAM
+
+- Frequent garbage collection pauses (stuttering)
+- `OutOfMemoryError` in logs
+- Server TPS drops below 18
+- World save lag spikes
+
+---
+
+## Integration with Packwiz Workflow
+
+### Recommended Development Loop
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Edit modpack in MCC/                                    │
+│     - Add/remove mods: packwiz mr install <mod>            │
+│     - Edit configs in overrides/                            │
+│     - Update pack.toml version                              │
+├─────────────────────────────────────────────────────────────┤
+│  2. Start packwiz serve                                     │
+│     cd MCC && packwiz serve                                │
+├─────────────────────────────────────────────────────────────┤
+│  3. Start test server (auto-updates from packwiz)           │
+│     cd mc-test-server && start.bat                         │
+├─────────────────────────────────────────────────────────────┤
+│  4. Launch client & connect to localhost                    │
+│     - Test the changes                                      │
+│     - Check /spark tps, look for errors                    │
+├─────────────────────────────────────────────────────────────┤
+│  5. If tests pass:                                          │
+│     - packwiz modrinth export                              │
+│     - python server-config.py update-pack X.Y.Z            │
+│     - python server-config.py restart                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Quick Sync Script
+
+Create `sync-to-test-server.ps1` in your MCC directory:
+
+```powershell
+# sync-to-test-server.ps1
+# Syncs server-side mods from packwiz to local test server
+
+$PackwizDir = "C:\Users\slash\Projects\MCC"
+$TestServerDir = "C:\Users\slash\Projects\mc-test-server"
+
+Write-Host "Refreshing packwiz index..." -ForegroundColor Cyan
+Set-Location $PackwizDir
+packwiz refresh
+
+Write-Host "Exporting mrpack..." -ForegroundColor Cyan
+packwiz modrinth export
+
+# Find the exported mrpack file
+$MrpackFile = Get-ChildItem -Path $PackwizDir -Filter "*.mrpack" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+if ($MrpackFile) {
+    Write-Host "Installing to test server: $($MrpackFile.Name)" -ForegroundColor Green
+    
+    # Stop server if running (via RCON)
+    try {
+        # Using mcrcon or similar tool
+        # mcrcon -H localhost -P 25575 -p testpassword "stop"
+        Write-Host "Note: Stop server manually before syncing if running" -ForegroundColor Yellow
+    } catch {}
+    
+    # Use mrpack-install
+    mrpack-install $MrpackFile.FullName --server-dir $TestServerDir
+    
+    Write-Host "Sync complete!" -ForegroundColor Green
+} else {
+    Write-Host "ERROR: No mrpack file found" -ForegroundColor Red
+}
+```
+
+---
+
+## Automation Scripts
+
+### Complete Test Environment Launcher
+
+Create `start-test-env.bat`:
+
+```batch
+@echo off
+title MCC Test Environment Launcher
+color 0A
+
+echo =============================================
+echo    MCC Test Environment Launcher
+echo =============================================
+echo.
+
+:: Check if packwiz serve is already running
+netstat -ano | findstr ":8080" > nul
+if %errorlevel% == 0 (
+    echo [OK] Packwiz serve appears to be running
+) else (
+    echo [STARTING] Packwiz serve...
+    start "Packwiz Serve" cmd /k "cd /d C:\Users\slash\Projects\MCC && packwiz serve"
+    timeout /t 3 /nobreak > nul
+)
+
+echo.
+echo [STARTING] Test Server...
+start "MCC Test Server" cmd /k "cd /d C:\Users\slash\Projects\mc-test-server && start.bat"
+
+echo.
+echo =============================================
+echo Test environment started!
+echo.
+echo - Packwiz:  http://localhost:8080/pack.toml
+echo - Server:   localhost:25565
+echo - RCON:     localhost:25575 (pw: testpassword)
+echo =============================================
+echo.
+echo Press any key to launch Prism Launcher...
+pause > nul
+
+:: Launch Prism Launcher (adjust path as needed)
+start "" "C:\Program Files\PrismLauncher\prismlauncher.exe"
+```
+
+### World Reset Script
+
+Create `reset-test-world.bat`:
+
+```batch
+@echo off
+echo =============================================
+echo    Reset Test World
+echo =============================================
+echo.
+echo This will DELETE the test world and generate a new one.
+echo.
+set /p confirm="Are you sure? (y/n): "
+if /i "%confirm%" neq "y" goto :end
+
+cd /d C:\Users\slash\Projects\mc-test-server
+
+:: Remove world directories
+if exist "world-test" rmdir /s /q "world-test"
+if exist "world-test_nether" rmdir /s /q "world-test_nether"
+if exist "world-test_the_end" rmdir /s /q "world-test_the_end"
+
+echo.
+echo [OK] Test world deleted. A new world will be generated on next server start.
+echo.
+
+:end
+pause
+```
+
+### Auto-Restart on Crash
+
+Create `start-with-restart.bat`:
+
+```batch
+@echo off
+title MCC Test Server (Auto-Restart)
+
+:loop
+echo Starting server...
+java -Xms4G -Xmx4G ^
+  -XX:+UseG1GC ^
+  -XX:+ParallelRefProcEnabled ^
+  -XX:MaxGCPauseMillis=200 ^
+  -jar fabric-server-launch.jar nogui
+
+echo.
+echo Server stopped. Restarting in 5 seconds...
+echo Press Ctrl+C to exit.
+timeout /t 5
+goto loop
+```
+
+---
+
+## Testing Scenarios
+
+### Pre-Deployment Checklist
+
+Before pushing to production, verify:
+
+| Test | How to Verify |
+|------|---------------|
+| Server starts without errors | Check `logs/latest.log` for exceptions |
+| Client connects successfully | Direct connect to `localhost` |
+| No mod conflicts | `/spark health` shows 20 TPS |
+| Configs applied | Check in-game settings match expectations |
+| Commands work | `/gamemode`, `/tp`, etc. |
+| New blocks/items exist | Creative inventory search |
+| Performance acceptable | F3 shows stable FPS, `/spark tps` shows 20 |
+
+### Testing Specific Mod Changes
+
+**Adding a new mod:**
+1. `packwiz mr install <mod-slug>`
+2. `packwiz refresh`
+3. Restart server (will auto-pull from packwiz serve)
+4. Re-launch client
+5. Verify mod loads: check Mod Menu, test features
+
+**Removing a mod:**
+1. Delete `.pw.toml` file from `mods/`
+2. `packwiz refresh`
+3. **Important**: Manually delete JAR from test server's `mods/` folder
+4. Restart server
+5. Verify world loads without errors
+
+**Config changes:**
+1. Edit file in `overrides/config/`
+2. `packwiz refresh`
+3. Restart server
+4. Verify changes in-game
+
+### Load Testing (Optional)
+
+For stress testing with multiple clients:
+
+1. Use https://github.com/PrismarineJS/mineflayer to create bot connections
+2. Or use a second computer on your LAN
+3. Monitor with `/spark profiler start` then `/spark profiler stop`
+
+---
+
+## Troubleshooting
+
+### Server Won't Start
+
+**Error: "Unable to access jarfile"**
+- Verify `fabric-server-launch.jar` exists and isn't corrupted
+- Re-download from fabricmc.net
+
+**Error: "Java version"**
+- Ensure Java 21 is installed and in PATH
+- Check with `java -version`
+
+**Error: "Port already in use"**
+- Another server or process is using 25565
+- Check with: `netstat -ano | findstr :25565`
+- Kill the process or change port in `server.properties`
+
+### Client Can't Connect
+
+**"Connection refused"**
+- Server isn't running or crashed—check console
+- Windows Firewall blocking—add exception for Java
+
+**"Outdated server/client"**
+- Minecraft versions don't match
+- Verify both are 1.21.1
+
+**"Mod mismatch"**
+- Server and client have different mods
+- Re-sync using packwiz workflow
+
+### Performance Issues
+
+**Server TPS below 20:**
+```
+/spark profiler start
+# Wait 30-60 seconds, do normal activities
+/spark profiler stop
+```
+Review the spark report for bottlenecks.
+
+**RAM maxed out:**
+- Reduce view-distance in `server.properties`
+- Lower client RAM allocation in Prism
+- Close other applications
+
+### Packwiz Serve Issues
+
+**"Connection refused" when server tries to update:**
+- Ensure `packwiz serve` is running
+- Check it's accessible at http://localhost:8080/pack.toml
+- Firewall may be blocking—try running as Administrator
+
+**Mods not updating:**
+- Run `packwiz refresh` to regenerate index
+- Check that `index.toml` hash changed
+- Restart server completely (not just reload)
+
+---
+
+## Quick Reference
+
+### Essential Commands
+
+| Action | Command |
+|--------|---------|
+| Start packwiz server | `packwiz serve` |
+| Refresh pack index | `packwiz refresh` |
+| Export mrpack | `packwiz modrinth export` |
+| Install to server | `mrpack-install <file.mrpack> --server-dir <path>` |
+| Check server TPS | `/spark tps` |
+| Profile server | `/spark profiler start` / `stop` |
+| Send RCON command | `mcrcon -H localhost -P 25575 -p testpassword "<command>"` |
+
+### Key Ports
+
+| Service | Port | Protocol |
+|---------|------|----------|
+| Minecraft Server | 25565 | TCP |
+| RCON | 25575 | TCP |
+| Packwiz Serve | 8080 | HTTP |
+
+### File Locations (Windows)
+
+| What | Path |
+|------|------|
+| Test Server | `C:\Users\slash\Projects\mc-test-server` |
+| Packwiz Project | `C:\Users\slash\Projects\MCC` |
+| Server Logs | `mc-test-server\logs\latest.log` |
+| Prism Instances | `%APPDATA%\PrismLauncher\instances\` |
+| Java 21 | `C:\Program Files\Eclipse Adoptium\jdk-21*\` |
+
+---
+
+## Next Steps
+
+After validating changes locally:
+
+1. **Bump version** in `pack.toml`
+2. **Update documentation** (README, CHANGELOG, CREDITS)
+3. **Export**: `packwiz modrinth export`
+4. **Deploy to production**: 
+   ```
+   python server-config.py update-pack X.Y.Z
+   python server-config.py restart
+   ```
+5. **Create GitHub release** with `.mrpack` artifact
+
+---
+
+*Last updated: January 2026*
+*For Minecraft 1.21.1 | Fabric Loader | MCC Modpack Development*
