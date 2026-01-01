@@ -66,7 +66,8 @@ LocalServer/
 │   ├── test-version.bat         # Test specific MCC version
 │   ├── validate-release.ps1     # Download + test mrpack
 │   ├── clear-mods.bat           # Remove mods (keep Fabric API)
-│   └── start-test-env.bat       # All-in-one launcher
+│   ├── start-test-env.bat       # All-in-one launcher
+│   └── sync-world.bat           # Download production world data
 └── docs/
     ├── TESTING-WORKFLOW.md      # Testing mode documentation
     └── LOCAL-GUIDE.md.txt       # Comprehensive setup guide
@@ -77,12 +78,31 @@ LocalServer/
 - **CurseForge API exclusions**: Some mods (Axiom, First Person Model) can't be auto-downloaded via packwiz. Use `validate-release.ps1` to extract from mrpack instead.
 - **AutoWhitelist warnings**: Expected in offline mode - safe to ignore for local testing.
 
-## Future: World Data Sync
+## World Data Sync
 
-TODO: Add workflow to copy production world data from Bloom.host for:
-- More realistic testing environment
+Download production world data from Bloom.host for realistic local testing:
+
+```bash
+# Quick method (from LocalServer)
+scripts\sync-world.bat
+
+# Or via MCC server-config.py
+cd ../MCC
+python server-config.py download-world             # Interactive
+python server-config.py download-world -y          # Non-interactive
+python server-config.py download-world --no-backup # Skip local backup
+```
+
+**What it does:**
+- Downloads `/world/`, `/world_nether/`, `/world_the_end/` from production
+- Saves to `world-production/`, `world-production_nether/`, `world-production_the_end/`
+- Backs up existing local world to `world-backup-YYYYMMDD_HHMMSS/`
+- Warns if local server is running (session.lock check)
+
+**Use cases:**
+- Realistic testing with actual world state
+- Bug reproduction in production environment
 - Offline backup of server world
-- Bug reproduction with actual world state
 
 ## Related Projects
 
