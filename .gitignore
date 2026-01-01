@@ -2,12 +2,34 @@
 world-test/
 world-test_nether/
 world-test_the_end/
+world-production/
+world-production_nether/
+world-production_the_end/
 logs/
 crash-reports/
 libraries/
 versions/
 .fabric/
 mods/
+
+# Mod-generated folders
+bluemap/
+config/
+fabricord/
+journeymap/
+minescript/
+shaderpacks/
+dynamic-data-pack-cache/
+
+# Runtime files
+whitelist-cache.json
+modpack-info.json
+options.txt
+*.old
+*.backup
+
+# Temp/test images
+*.png
 
 # Server runtime files
 *.jar

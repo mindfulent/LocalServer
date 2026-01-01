@@ -80,11 +80,13 @@ catch {
     exit 1
 }
 
-# Extract mrpack (it's a zip file)
+# Extract mrpack (it's a zip file, rename to .zip for PowerShell)
 Write-Host ""
 Write-Host "Extracting mrpack..." -ForegroundColor Yellow
 $ExtractDir = Join-Path $TempDir "extracted"
-Expand-Archive -Path $MrpackFile -DestinationPath $ExtractDir
+$ZipFile = $MrpackFile -replace '\.mrpack$', '.zip'
+Copy-Item -Path $MrpackFile -Destination $ZipFile
+Expand-Archive -Path $ZipFile -DestinationPath $ExtractDir
 
 # Read modrinth.index.json to get mod list
 $IndexFile = Join-Path $ExtractDir "modrinth.index.json"

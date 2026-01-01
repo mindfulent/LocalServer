@@ -4,6 +4,17 @@ All notable changes to the LocalServer test environment will be documented in th
 
 ---
 
+## [1.2.1] - 2026-01-01
+
+### Fixed
+- `scripts/validate-release.ps1` - Fixed mrpack extraction (rename to .zip for PowerShell compatibility)
+- Updated `.gitignore` to exclude mod-generated folders (bluemap, config, journeymap, etc.)
+
+### Changed
+- Fabric Loader updated to 0.18.4 (required by newer mods)
+
+---
+
 ## [1.2.0] - 2026-01-01
 
 ### Added
