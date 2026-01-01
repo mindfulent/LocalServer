@@ -4,15 +4,16 @@ All notable changes to the LocalServer test environment will be documented in th
 
 ---
 
-## [Unreleased]
+## [1.1.0] - 2026-01-01
 
 ### Added
-- `docs/TESTING-WORKFLOW-PLAN.md` - Plan for multi-mode testing workflow
-
-### Planned
-- Vanilla mode (`start-vanilla.bat`) - Run server without mods
-- Version testing (`scripts/test-version.bat`) - Test specific modpack versions
-- Release validation (`scripts/validate-release.ps1`) - Validate mrpack artifacts
+- Multi-mode testing workflow with four distinct modes:
+  - **Vanilla mode**: `start-vanilla.bat` - Run server without modpack mods
+  - **Development mode**: `start.bat` - Existing packwiz sync workflow
+  - **Version testing**: `scripts/test-version.bat` - Test specific tagged versions
+  - **Release validation**: `scripts/validate-release.ps1` - Validate mrpack artifacts
+- `scripts/clear-mods.bat` - Remove all mods except Fabric API
+- `docs/TESTING-WORKFLOW.md` - Documentation for all testing modes
 
 ---
 
