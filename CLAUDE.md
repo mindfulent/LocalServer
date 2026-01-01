@@ -4,43 +4,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Purpose
 
-This repository contains a local Minecraft 1.21.1 Fabric test server for Windows. It's used to validate MCC modpack changes before deploying to the production server on Bloom.host.
+Local Minecraft 1.21.1 Fabric test server for Windows. Used to validate MCC modpack changes before deploying to production (Bloom.host).
 
-## Directory Structure
+## Testing Modes
 
-```
-LocalServer/
-├── docs/LOCAL-GUIDE.md.txt    # Comprehensive setup guide
-├── scripts/                    # Automation scripts
-│   ├── start-test-env.bat     # Launch entire test environment
-│   ├── reset-test-world.bat   # Delete and regenerate test world
-│   └── sync-to-test-server.ps1 # Export mrpack from MCC
-├── start.bat                   # Main server launcher
-├── start-with-restart.bat      # Auto-restart on crash
-├── server.properties           # Server configuration
-└── eula.txt                    # EULA acceptance
-```
+| Mode | Script | Use Case |
+|------|--------|----------|
+| Development | `start.bat` | Test latest MCC with packwiz sync |
+| Production | `scripts/production-mode.bat` | Replicate production experience |
+| Vanilla | `start-vanilla.bat` | Test without mods |
+| Version Testing | `scripts/test-version.bat` | Test specific MCC version tags |
+| Release Validation | `scripts/validate-release.ps1` | Test exact mrpack artifact |
+
+See `docs/TESTING-WORKFLOW.md` for detailed usage.
 
 ## Quick Start
 
 ```bash
-# Terminal 1: Start packwiz serve
-cd ../MCC && ./packwiz.exe serve
+# Development mode (most common)
+cd ../MCC && ./packwiz.exe serve   # Terminal 1
+./start.bat                         # Terminal 2
 
-# Terminal 2: Start test server
-./start.bat
+# Production mode (realistic testing)
+scripts/production-mode.bat         # Switch settings + sync configs
+start.bat                           # Start server
 
-# Or use all-in-one launcher:
-./scripts/start-test-env.bat
+# Test specific version
+scripts/test-version.bat            # Interactive: select version tag
 ```
 
-Connect in Minecraft: `localhost:25565`
+Connect: `localhost:25565`
 
 ## Key Configuration
 
-- **Java 21**: Uses Prism Launcher's bundled JDK at `%APPDATA%\PrismLauncher\java\java-runtime-delta\`
-- **RAM**: 4GB allocated (adjustable in start.bat)
-- **Packwiz Integration**: Auto-syncs mods from `http://localhost:8080/pack.toml` when packwiz serve is running
+- **Java 21**: Prism Launcher's bundled JDK (`%APPDATA%\PrismLauncher\java\java-runtime-delta\`)
+- **Fabric Loader**: 0.18.4+ required (download fresh `fabric-server-launch.jar` if needed)
+- **RAM**: 4GB allocated (adjustable in start scripts)
 - **Offline Mode**: `online-mode=false` for faster testing
 
 ## Ports
@@ -50,6 +49,40 @@ Connect in Minecraft: `localhost:25565`
 | Minecraft Server | 25565 |
 | RCON | 25575 (pw: `testpassword`) |
 | Packwiz Serve | 8080 |
+| BlueMap | 8100 |
+| Voice Chat | 24454 |
+
+## Directory Structure
+
+```
+LocalServer/
+├── start.bat                    # Dev mode with packwiz sync
+├── start-vanilla.bat            # No mods, no packwiz
+├── server.properties.test       # Test settings (superflat, peaceful)
+├── server.properties.production # Production settings (normal world)
+├── scripts/
+│   ├── production-mode.bat      # Switch to production + sync configs
+│   ├── test-mode.bat            # Switch back to test mode
+│   ├── test-version.bat         # Test specific MCC version
+│   ├── validate-release.ps1     # Download + test mrpack
+│   ├── clear-mods.bat           # Remove mods (keep Fabric API)
+│   └── start-test-env.bat       # All-in-one launcher
+└── docs/
+    ├── TESTING-WORKFLOW.md      # Testing mode documentation
+    └── LOCAL-GUIDE.md.txt       # Comprehensive setup guide
+```
+
+## Known Issues
+
+- **CurseForge API exclusions**: Some mods (Axiom, First Person Model) can't be auto-downloaded via packwiz. Use `validate-release.ps1` to extract from mrpack instead.
+- **AutoWhitelist warnings**: Expected in offline mode - safe to ignore for local testing.
+
+## Future: World Data Sync
+
+TODO: Add workflow to copy production world data from Bloom.host for:
+- More realistic testing environment
+- Offline backup of server world
+- Bug reproduction with actual world state
 
 ## Related Projects
 
