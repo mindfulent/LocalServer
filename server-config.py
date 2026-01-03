@@ -418,7 +418,7 @@ def show_status():
 # Server Control Functions
 # =============================================================================
 
-def start_server(vanilla=False):
+def start_server():
     """Start the Minecraft server"""
     if is_server_running():
         console.print("[yellow]Server is already running![/yellow]")
@@ -436,10 +436,17 @@ def start_server(vanilla=False):
         console.print(f"[red]Error: {SERVER_JAR} not found![/red]")
         return False
 
-    console.print(f"[cyan]Starting server in {'vanilla' if vanilla else 'modded'} mode...[/cyan]")
+    # Auto-detect vanilla mode from current server.properties
+    current_mode = get_current_mode()
+    is_vanilla = (current_mode == "vanilla")
 
-    # Sync from packwiz if not vanilla
-    if not vanilla:
+    if is_vanilla:
+        console.print("[yellow]Starting server in VANILLA mode (no packwiz sync)...[/yellow]")
+    else:
+        console.print(f"[cyan]Starting server in {current_mode.upper()} mode...[/cyan]")
+
+    # Sync from packwiz if not vanilla mode
+    if not is_vanilla:
         packwiz_bootstrap = os.path.join(SCRIPT_DIR, "packwiz-installer-bootstrap.jar")
         if os.path.exists(packwiz_bootstrap):
             console.print("[dim]Syncing mods from packwiz...[/dim]")
@@ -451,7 +458,7 @@ def start_server(vanilla=False):
                     capture_output=True
                 )
             except subprocess.TimeoutExpired:
-                console.print("[yellow]Packwiz sync timed out (server may not be running)[/yellow]")
+                console.print("[yellow]Packwiz sync timed out (packwiz serve may not be running)[/yellow]")
             except Exception as e:
                 console.print(f"[yellow]Packwiz sync failed: {e}[/yellow]")
 
