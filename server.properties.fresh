@@ -1,7 +1,7 @@
 #Minecraft server properties
-#Production-like settings for LocalServer testing
+#Fresh World Mode - Clean slate with all mods
 
-# === GAMEPLAY (matches production) ===
+# === GAMEPLAY ===
 gamemode=creative
 force-gamemode=true
 difficulty=normal
@@ -10,17 +10,18 @@ allow-flight=true
 spawn-protection=0
 enable-command-block=true
 
-# === WORLD (uses copy of production backup) ===
-level-name=world-local
+# === WORLD (fresh generated world) ===
+level-name=world-fresh
 level-type=minecraft\:normal
 generate-structures=true
+level-seed=
 
-# === MOBS (enabled for production-like testing) ===
+# === MOBS ===
 spawn-monsters=true
 spawn-animals=true
 spawn-npcs=true
 
-# === PERFORMANCE (reduced from production 32 for local testing) ===
+# === PERFORMANCE ===
 view-distance=12
 simulation-distance=10
 max-players=4
@@ -38,6 +39,6 @@ rcon.password=testpassword
 rcon.port=25575
 
 # === MISC ===
-motd=\u00A76MCC Test Server \u00A77[PRODUCTION MODE]
+motd=\u00A7aMCC Test Server \u00A77[FRESH WORLD]
 white-list=false
 enable-query=false

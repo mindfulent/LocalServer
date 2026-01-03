@@ -1,10 +1,21 @@
 # Minecraft server generated files
-world-test/
-world-test_nether/
-world-test_the_end/
 world-production/
 world-production_nether/
 world-production_the_end/
+world-local/
+world-local_nether/
+world-local_the_end/
+world-fresh/
+world-fresh_nether/
+world-fresh_the_end/
+world-vanilla/
+world-vanilla_nether/
+world-vanilla_the_end/
+world-test/
+world-test_nether/
+world-test_the_end/
+world-backup-*/
+backups/
 logs/
 crash-reports/
 libraries/
@@ -24,6 +35,7 @@ dynamic-data-pack-cache/
 # Runtime files
 whitelist-cache.json
 modpack-info.json
+packwiz.json
 options.txt
 *.old
 *.backup

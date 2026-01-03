@@ -8,7 +8,12 @@ Usage:
     python server-config.py start        # Start server
     python server-config.py stop         # Stop server via RCON
     python server-config.py status       # Show current status
-    python server-config.py mode <mode>  # Switch mode (production/test)
+    python server-config.py mode <mode>  # Switch mode (production/fresh/vanilla)
+
+Server Modes:
+    production  - Uses copy of production backup, all mods installed
+    fresh       - Fresh world generation, all mods installed
+    vanilla     - Fresh world generation, Fabric API only (for debugging)
 
 Note: World sync commands (world-download, world-upload) are in MCC/server-config.py
 """
@@ -362,10 +367,12 @@ def get_current_mode():
         for line in f:
             if line.startswith('level-name='):
                 level_name = line.split('=', 1)[1].strip()
-                if 'production' in level_name.lower():
+                if level_name == "world-local":
                     return "production"
-                elif 'test' in level_name.lower():
-                    return "test"
+                elif level_name == "world-fresh":
+                    return "fresh"
+                elif level_name == "world-vanilla":
+                    return "vanilla"
     return "unknown"
 
 
@@ -374,7 +381,13 @@ def show_status():
     mode = get_current_mode()
     running = is_server_running()
 
-    mode_color = "cyan" if mode == "production" else "yellow" if mode == "test" else "dim"
+    mode_colors = {
+        "production": "cyan",
+        "fresh": "green",
+        "vanilla": "yellow",
+        "unknown": "dim"
+    }
+    mode_color = mode_colors.get(mode, "dim")
     status_color = "green" if running else "red"
     status_text = "RUNNING" if running else "STOPPED"
 
@@ -383,16 +396,22 @@ def show_status():
 
     # Show world folders
     console.print(f"\n[bold]World Folders:[/bold]")
-    for world in ["world-test", "world-production"]:
+    world_info = [
+        ("world-production", "Backup from production (pristine)"),
+        ("world-local", "Working copy for Production mode"),
+        ("world-fresh", "Fresh World mode"),
+        ("world-vanilla", "Vanilla Debug mode"),
+    ]
+    for world, description in world_info:
         path = os.path.join(SCRIPT_DIR, world)
         if os.path.exists(path):
             size = sum(os.path.getsize(os.path.join(dirpath, filename))
                       for dirpath, dirnames, filenames in os.walk(path)
                       for filename in filenames)
             size_str = f"{size / (1024*1024):.1f} MB" if size < 1024*1024*1024 else f"{size / (1024*1024*1024):.2f} GB"
-            console.print(f"  [green]✓[/green] {world}/ ({size_str})")
+            console.print(f"  [green]✓[/green] {world}/ ({size_str}) - {description}")
         else:
-            console.print(f"  [dim]✗ {world}/ (not found)[/dim]")
+            console.print(f"  [dim]✗ {world}/ - {description}[/dim]")
 
 
 # =============================================================================
@@ -597,33 +616,90 @@ def switch_to_production_mode():
     return True
 
 
-def switch_to_test_mode():
-    """Switch local server to test mode"""
+def switch_to_fresh_mode():
+    """Switch local server to fresh world mode"""
     console.print(Panel(
-        "[bold]Test Mode Setup[/bold]\n\n"
-        "Switching back to test settings:\n"
-        "  • Superflat world\n"
-        "  • Peaceful difficulty\n"
-        "  • No mobs",
-        title="[cyan]Mode Switch[/cyan]",
-        border_style="cyan"
+        "[bold]Fresh World Mode Setup[/bold]\n\n"
+        "Clean slate testing with all mods:\n"
+        "  • Fresh world (normal terrain generation)\n"
+        "  • All modpack mods installed\n"
+        "  • Good for testing mod initialization\n\n"
+        "[dim]World will be generated on first start.[/dim]",
+        title="[green]Mode Switch[/green]",
+        border_style="green"
     ))
 
     # Check paths exist
-    props_test = os.path.join(SCRIPT_DIR, "server.properties.test")
-    if not os.path.exists(props_test):
-        console.print(f"[red]Error: {props_test} not found![/red]")
+    props_fresh = os.path.join(SCRIPT_DIR, "server.properties.fresh")
+    if not os.path.exists(props_fresh):
+        console.print(f"[red]Error: {props_fresh} not found![/red]")
         return False
 
     # Switch server.properties
-    console.print("\n[bold]Switching to test server.properties...[/bold]")
+    console.print("\n[bold]Switching to fresh world server.properties...[/bold]")
     props_file = os.path.join(SCRIPT_DIR, "server.properties")
-    shutil.copy(props_test, props_file)
+    shutil.copy(props_fresh, props_file)
     console.print("[green]✓ server.properties updated[/green]")
 
     # Summary
     console.print("\n" + "="*50)
-    console.print("[bold green]✓ Test Mode Ready[/bold green]")
+    console.print("[bold green]✓ Fresh World Mode Ready[/bold green]")
+    console.print("[dim]World folder: world-fresh/[/dim]")
+    console.print("="*50)
+
+    return True
+
+
+def switch_to_vanilla_mode():
+    """Switch local server to vanilla debug mode"""
+    console.print(Panel(
+        "[bold]Vanilla Debug Mode Setup[/bold]\n\n"
+        "Fabric-only testing (no modpack mods):\n"
+        "  • Fresh world (normal terrain generation)\n"
+        "  • Only Fabric API installed\n"
+        "  • Good for isolating mod issues\n\n"
+        "[yellow]Note: This clears all mods except Fabric API.[/yellow]",
+        title="[yellow]Mode Switch[/yellow]",
+        border_style="yellow"
+    ))
+
+    # Check paths exist
+    props_vanilla = os.path.join(SCRIPT_DIR, "server.properties.vanilla")
+    if not os.path.exists(props_vanilla):
+        console.print(f"[red]Error: {props_vanilla} not found![/red]")
+        return False
+
+    # Switch server.properties
+    console.print("\n[bold]Step 1/2: Switching to vanilla server.properties...[/bold]")
+    props_file = os.path.join(SCRIPT_DIR, "server.properties")
+    shutil.copy(props_vanilla, props_file)
+    console.print("[green]✓ server.properties updated[/green]")
+
+    # Clear mods (keep only Fabric API)
+    console.print("\n[bold]Step 2/2: Clearing mods (keeping Fabric API)...[/bold]")
+    mods_dir = os.path.join(SCRIPT_DIR, "mods")
+    if os.path.exists(mods_dir):
+        all_jars = [f for f in os.listdir(mods_dir) if f.endswith('.jar')]
+        fabric_api = [f for f in all_jars if 'fabric-api' in f.lower()]
+        to_remove = [f for f in all_jars if f not in fabric_api]
+
+        for f in to_remove:
+            os.remove(os.path.join(mods_dir, f))
+
+        # Also remove .pw.toml files
+        pw_files = [f for f in os.listdir(mods_dir) if f.endswith('.pw.toml')]
+        for f in pw_files:
+            os.remove(os.path.join(mods_dir, f))
+
+        console.print(f"[green]✓ Removed {len(to_remove)} mods, kept {len(fabric_api)} Fabric API[/green]")
+    else:
+        console.print("[yellow]No mods folder found[/yellow]")
+
+    # Summary
+    console.print("\n" + "="*50)
+    console.print("[bold green]✓ Vanilla Debug Mode Ready[/bold green]")
+    console.print("[dim]World folder: world-vanilla/[/dim]")
+    console.print("[dim]To restore mods: Switch to Production or Fresh mode[/dim]")
     console.print("="*50)
 
     return True
@@ -834,14 +910,19 @@ def reset_world(mode):
     """Delete world folders for specified mode"""
     from rich.prompt import Confirm
 
-    if mode == "test":
-        world_dirs = ["world-test", "world-test_nether", "world-test_the_end"]
-    elif mode == "production":
-        world_dirs = ["world-production", "world-production_nether", "world-production_the_end"]
-    else:
+    world_map = {
+        "fresh": ["world-fresh", "world-fresh_nether", "world-fresh_the_end"],
+        "vanilla": ["world-vanilla", "world-vanilla_nether", "world-vanilla_the_end"],
+        "production": ["world-production", "world-production_nether", "world-production_the_end"],
+        "local": ["world-local", "world-local_nether", "world-local_the_end"],
+    }
+
+    if mode not in world_map:
         console.print(f"[red]Unknown mode: {mode}[/red]")
+        console.print(f"[dim]Valid modes: {', '.join(world_map.keys())}[/dim]")
         return False
 
+    world_dirs = world_map[mode]
     existing = [d for d in world_dirs if os.path.exists(os.path.join(SCRIPT_DIR, d))]
 
     if not existing:
@@ -999,7 +1080,13 @@ def interactive_menu():
         # Show status
         mode = get_current_mode()
         running = is_server_running()
-        mode_color = "cyan" if mode == "production" else "yellow" if mode == "test" else "dim"
+        mode_colors = {
+            "production": "cyan",
+            "fresh": "green",
+            "vanilla": "yellow",
+            "unknown": "dim"
+        }
+        mode_color = mode_colors.get(mode, "dim")
         status_color = "green" if running else "red"
         status_text = "RUNNING" if running else "STOPPED"
 
@@ -1014,18 +1101,19 @@ def interactive_menu():
         table.add_row("1", "Start Server")
         table.add_row("2", "Stop Server (RCON)")
         table.add_row("", "")
-        table.add_row("", "[dim]── Mode ──[/dim]")
-        table.add_row("3", "Switch to Production Mode")
-        table.add_row("4", "Switch to Test Mode")
+        table.add_row("", "[dim]── Server Mode ──[/dim]")
+        table.add_row("p", "[cyan]Production Mode[/cyan] (copy of backup, all mods)")
+        table.add_row("f", "[green]Fresh World Mode[/green] (new world, all mods)")
+        table.add_row("v", "[yellow]Vanilla Debug Mode[/yellow] (new world, Fabric only)")
         table.add_row("", "")
-        table.add_row("", "[dim]── World ──[/dim]")
-        table.add_row("5", "[dim]Download Backup (use MCC/server-config.py)[/dim]")
-        table.add_row("6", "Reset Local World (from backup)")
-        table.add_row("7", "Reset Test World")
-        table.add_row("8", "[red]Delete Production Backup[/red]")
+        table.add_row("", "[dim]── World Management ──[/dim]")
+        table.add_row("3", "[dim]Download Backup (use MCC/server-config.py)[/dim]")
+        table.add_row("4", "Reset Local World (from backup)")
+        table.add_row("5", "Delete Fresh World")
+        table.add_row("6", "Delete Vanilla World")
+        table.add_row("7", "[red]Delete Production Backup[/red]")
         table.add_row("", "")
         table.add_row("", "[dim]── Utilities ──[/dim]")
-        table.add_row("9", "Clear Mods (keep Fabric API)")
         table.add_row("r", "Send RCON Command")
         table.add_row("s", "Show Status")
         table.add_row("", "")
@@ -1034,7 +1122,7 @@ def interactive_menu():
         console.print(table)
         console.print()
 
-        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "s", "q"], default="q")
+        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "p", "f", "v", "r", "s", "q"], default="q")
 
         if choice == "1":
             start_server()
@@ -1044,34 +1132,38 @@ def interactive_menu():
             stop_server()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
-        elif choice == "3":
+        elif choice == "p":
             switch_to_production_mode()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
-        elif choice == "4":
-            switch_to_test_mode()
+        elif choice == "f":
+            switch_to_fresh_mode()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
-        elif choice == "5":
+        elif choice == "v":
+            switch_to_vanilla_mode()
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "3":
             console.print("\n[yellow]This command has moved to MCC/server-config.py[/yellow]")
             console.print("[cyan]Run from MCC directory:[/cyan]")
             console.print("  python server-config.py world-download")
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
-        elif choice == "6":
+        elif choice == "4":
             reset_local_world()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
+        elif choice == "5":
+            reset_world("fresh")
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "6":
+            reset_world("vanilla")
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
         elif choice == "7":
-            reset_world("test")
-            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
-
-        elif choice == "8":
             reset_world("production")
-            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
-
-        elif choice == "9":
-            clear_mods()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "r":
@@ -1102,33 +1194,26 @@ if __name__ == "__main__":
         command = sys.argv[1]
 
         if command == "start":
-            vanilla = "--vanilla" in sys.argv
-            start_server(vanilla=vanilla)
+            start_server()
         elif command == "stop":
             stop_server()
         elif command == "status":
             show_status()
         elif command == "mode":
             if len(sys.argv) < 3:
-                console.print("[yellow]Usage: python server-config.py mode <production|test>[/yellow]")
+                console.print("[yellow]Usage: python server-config.py mode <production|fresh|vanilla>[/yellow]")
             elif sys.argv[2] == "production":
                 switch_to_production_mode()
-            elif sys.argv[2] == "test":
-                switch_to_test_mode()
+            elif sys.argv[2] == "fresh":
+                switch_to_fresh_mode()
+            elif sys.argv[2] == "vanilla":
+                switch_to_vanilla_mode()
             else:
                 console.print(f"[red]Unknown mode: {sys.argv[2]}[/red]")
-        elif command == "download-world":
-            console.print("[yellow]DEPRECATED: This command has moved to MCC/server-config.py[/yellow]")
-            console.print("[cyan]Run from MCC directory:[/cyan]")
-            console.print("  python server-config.py world-download")
-            console.print()
-            # Still run for backwards compatibility
-            auto_yes = "-y" in sys.argv or "--yes" in sys.argv
-            no_backup = "--no-backup" in sys.argv
-            download_world(backup_existing=not no_backup, auto_confirm=auto_yes)
+                console.print("[dim]Valid modes: production, fresh, vanilla[/dim]")
         elif command == "reset-world":
             if len(sys.argv) < 3:
-                console.print("[yellow]Usage: python server-config.py reset-world <test|production>[/yellow]")
+                console.print("[yellow]Usage: python server-config.py reset-world <fresh|vanilla|production|local>[/yellow]")
             else:
                 reset_world(sys.argv[2])
         elif command == "reset-local":
@@ -1146,17 +1231,19 @@ if __name__ == "__main__":
         else:
             console.print("[yellow]Usage:[/yellow]")
             console.print("  python server-config.py              # Interactive menu")
-            console.print("  python server-config.py start [--vanilla]  # Start server")
+            console.print("  python server-config.py start        # Start server")
             console.print("  python server-config.py stop         # Stop server via RCON")
             console.print("  python server-config.py status       # Show current status")
             console.print("")
-            console.print("[yellow]Mode:[/yellow]")
-            console.print("  python server-config.py mode production  # Switch to production mode")
-            console.print("  python server-config.py mode test        # Switch to test mode")
+            console.print("[yellow]Server Mode:[/yellow]")
+            console.print("  python server-config.py mode production  # Copy of backup, all mods")
+            console.print("  python server-config.py mode fresh       # New world, all mods")
+            console.print("  python server-config.py mode vanilla     # New world, Fabric only")
             console.print("")
-            console.print("[yellow]World:[/yellow]")
-            console.print("  python server-config.py reset-local                        # Reset world-local from backup")
-            console.print("  python server-config.py reset-world <test|production>      # Delete world folders")
+            console.print("[yellow]World Management:[/yellow]")
+            console.print("  python server-config.py reset-local      # Reset world-local from backup")
+            console.print("  python server-config.py reset-world <mode>  # Delete world folders")
+            console.print("                                           # (fresh, vanilla, production, local)")
             console.print("")
             console.print("[dim]Note: Backup sync commands are in MCC/server-config.py:[/dim]")
             console.print("[dim]  world-download  - Download production → world-production (backup)[/dim]")

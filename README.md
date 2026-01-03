@@ -7,7 +7,7 @@ Local Minecraft 1.21.1 Fabric test server for validating [MCC modpack](https://g
 - **Fabric 1.21.1** with optimized JVM flags (Aikar's G1GC tuning)
 - **Packwiz integration** - Auto-syncs mods from `packwiz serve`
 - **Offline mode** - No authentication for faster testing
-- **Two modes**: Test (superflat) and Production (uses backup copy)
+- **Three server modes**: Production, Fresh World, and Vanilla Debug
 - **Backup preservation** - Production mode uses a working copy, leaving backup untouched
 - **RCON enabled** - Remote console for scripted commands
 - **Automation scripts** - One-click environment launch
@@ -53,17 +53,25 @@ cd ..\LocalServer
 
 ## Server Modes
 
-LocalServer supports two modes, managed via `python server-config.py`:
-
-### Test Mode (default)
-- Uses `world-test/` - superflat world
-- Peaceful difficulty, no mobs
-- Fast world generation for quick testing
+LocalServer supports three modes, managed via `python server-config.py`:
 
 ### Production Mode
 - Uses `world-local/` - a **copy** of the production backup
+- All modpack mods installed
 - Normal world generation, mobs enabled
 - Syncs configs from MCC
+- **Primary use case**: Testing mods with real production world
+
+### Fresh World Mode
+- Uses `world-fresh/` - newly generated world
+- All modpack mods installed
+- Normal world generation, mobs enabled
+- **Use case**: Testing mod initialization, clean slate scenarios
+
+### Vanilla Debug Mode
+- Uses `world-vanilla/` - newly generated world
+- Only Fabric API installed (all other mods removed)
+- **Use case**: Isolating mod issues, "does this crash without mods?"
 
 **Backup preservation:** When switching to production mode, the server automatically copies `world-production/` (the backup from `world-download`) to `world-local/` (the working copy). This means:
 - Your backup is never modified by LocalServer
@@ -74,16 +82,18 @@ LocalServer supports two modes, managed via `python server-config.py`:
 
 | Folder | Purpose | Modified by LocalServer? |
 |--------|---------|--------------------------|
-| `world-test/` | Test mode world (superflat) | Yes |
 | `world-production/` | Backup from production | **No** (pristine) |
-| `world-local/` | Working copy for production mode | Yes |
+| `world-local/` | Working copy for Production mode | Yes |
+| `world-fresh/` | Fresh World mode | Yes |
+| `world-vanilla/` | Vanilla Debug mode | Yes |
 
 ### Key Commands
 
 ```bash
 python server-config.py                    # Interactive menu
 python server-config.py mode production    # Switch to production mode
-python server-config.py mode test          # Switch to test mode
+python server-config.py mode fresh         # Switch to fresh world mode
+python server-config.py mode vanilla       # Switch to vanilla debug mode
 python server-config.py reset-local        # Reset world-local from backup
 ```
 
@@ -92,16 +102,18 @@ python server-config.py reset-local        # Reset world-local from backup
 ```
 LocalServer/
 ├── docs/
-│   └── LOCAL-GUIDE.md.txt     # Comprehensive setup guide
+│   └── LOCAL-GUIDE.md.txt       # Comprehensive setup guide
 ├── scripts/
-│   ├── start-test-env.bat     # All-in-one environment launcher
-│   ├── reset-test-world.bat   # Delete test world for fresh start
-│   └── sync-to-test-server.ps1 # Export mrpack from MCC
-├── start.bat                   # Main server launcher
-├── start-with-restart.bat      # Auto-restart on crash
-├── server.properties           # Server configuration
-├── eula.txt                    # Minecraft EULA acceptance
-└── CLAUDE.md                   # Claude Code instructions
+│   ├── start-test-env.bat       # All-in-one environment launcher
+│   └── sync-to-test-server.ps1  # Export mrpack from MCC
+├── server.properties            # Active server configuration
+├── server.properties.production # Production mode template
+├── server.properties.fresh      # Fresh World mode template
+├── server.properties.vanilla    # Vanilla Debug mode template
+├── start.bat                    # Main server launcher
+├── start-with-restart.bat       # Auto-restart on crash
+├── eula.txt                     # Minecraft EULA acceptance
+└── CLAUDE.md                    # Claude Code instructions
 ```
 
 ## Configuration
@@ -112,10 +124,10 @@ LocalServer/
 |---------|-------|---------|
 | `server-ip` | `127.0.0.1` | Localhost only |
 | `online-mode` | `false` | Skip authentication |
-| `level-type` | `minecraft:flat` | Fast world gen |
-| `view-distance` | `8` | Reduced for shared RAM |
+| `level-type` | `minecraft:normal` | Standard world generation |
+| `view-distance` | `12` | Balanced for local testing |
 | `gamemode` | `creative` | Testing convenience |
-| `difficulty` | `peaceful` | No mob distractions |
+| `difficulty` | `normal` | Mobs enabled for realistic testing |
 
 ### JVM Flags
 
@@ -165,10 +177,6 @@ Launches the complete test environment:
 - Checks if packwiz serve is running, starts it if not
 - Starts the Minecraft server
 - Optionally launches Prism Launcher
-
-### reset-test-world.bat
-
-Deletes the test world directories (`world-test`, `world-test_nether`, `world-test_the_end`) for a fresh start.
 
 ### sync-to-test-server.ps1
 
