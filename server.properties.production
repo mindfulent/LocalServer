@@ -10,8 +10,8 @@ allow-flight=true
 spawn-protection=0
 enable-command-block=true
 
-# === WORLD (normal generation, not superflat) ===
-level-name=world-production
+# === WORLD (uses copy of production backup) ===
+level-name=world-local
 level-type=minecraft\:normal
 generate-structures=true
 

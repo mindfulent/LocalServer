@@ -7,7 +7,8 @@ Local Minecraft 1.21.1 Fabric test server for validating [MCC modpack](https://g
 - **Fabric 1.21.1** with optimized JVM flags (Aikar's G1GC tuning)
 - **Packwiz integration** - Auto-syncs mods from `packwiz serve`
 - **Offline mode** - No authentication for faster testing
-- **Flat world** - Clean testing surface with fast world generation
+- **Two modes**: Test (superflat) and Production (uses backup copy)
+- **Backup preservation** - Production mode uses a working copy, leaving backup untouched
 - **RCON enabled** - Remote console for scripted commands
 - **Automation scripts** - One-click environment launch
 
@@ -49,6 +50,42 @@ cd ..\LocalServer
 1. Launch your MCC instance in Prism Launcher
 2. Go to **Multiplayer** → **Direct Connect**
 3. Enter: `localhost`
+
+## Server Modes
+
+LocalServer supports two modes, managed via `python server-config.py`:
+
+### Test Mode (default)
+- Uses `world-test/` - superflat world
+- Peaceful difficulty, no mobs
+- Fast world generation for quick testing
+
+### Production Mode
+- Uses `world-local/` - a **copy** of the production backup
+- Normal world generation, mobs enabled
+- Syncs configs from MCC
+
+**Backup preservation:** When switching to production mode, the server automatically copies `world-production/` (the backup from `world-download`) to `world-local/` (the working copy). This means:
+- Your backup is never modified by LocalServer
+- You can break things locally and reset anytime
+- `world-upload` pushes the pristine backup, not local changes
+
+### World Folders
+
+| Folder | Purpose | Modified by LocalServer? |
+|--------|---------|--------------------------|
+| `world-test/` | Test mode world (superflat) | Yes |
+| `world-production/` | Backup from production | **No** (pristine) |
+| `world-local/` | Working copy for production mode | Yes |
+
+### Key Commands
+
+```bash
+python server-config.py                    # Interactive menu
+python server-config.py mode production    # Switch to production mode
+python server-config.py mode test          # Switch to test mode
+python server-config.py reset-local        # Reset world-local from backup
+```
 
 ## Directory Structure
 

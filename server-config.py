@@ -9,7 +9,8 @@ Usage:
     python server-config.py stop         # Stop server via RCON
     python server-config.py status       # Show current status
     python server-config.py mode <mode>  # Switch mode (production/test)
-    python server-config.py download-world  # Download production world
+
+Note: World sync commands (world-download, world-upload) are in MCC/server-config.py
 """
 
 import os
@@ -505,10 +506,11 @@ def switch_to_production_mode():
     console.print(Panel(
         "[bold]Production Mode Setup[/bold]\n\n"
         "This mode replicates production settings:\n"
-        "  • Normal world generation (not superflat)\n"
+        "  • Uses a copy of the production world backup\n"
         "  • Mobs enabled\n"
         "  • Configs synced from MCC\n"
-        "  • Production-like server.properties",
+        "  • Production-like server.properties\n\n"
+        "[dim]The original backup (world-production) is preserved.[/dim]",
         title="[cyan]Mode Switch[/cyan]",
         border_style="cyan"
     ))
@@ -520,13 +522,13 @@ def switch_to_production_mode():
         return False
 
     # Step 1: Switch server.properties
-    console.print("\n[bold]Step 1/3: Switching to production server.properties...[/bold]")
+    console.print("\n[bold]Step 1/4: Switching to production server.properties...[/bold]")
     props_file = os.path.join(SCRIPT_DIR, "server.properties")
     shutil.copy(props_production, props_file)
     console.print("[green]✓ server.properties updated[/green]")
 
     # Step 2: Sync configs from MCC
-    console.print("\n[bold]Step 2/3: Syncing configs from MCC...[/bold]")
+    console.print("\n[bold]Step 2/4: Syncing configs from MCC...[/bold]")
     mcc_config = os.path.join(MCC_DIR, "config")
     local_config = os.path.join(SCRIPT_DIR, "config")
 
@@ -547,15 +549,45 @@ def switch_to_production_mode():
     else:
         console.print("[yellow]⚠ MCC config folder not found, skipping sync[/yellow]")
 
-    # Step 3: World status
-    console.print("\n[bold]Step 3/3: World setup...[/bold]")
-    world_production = os.path.join(SCRIPT_DIR, "world-production")
-    if os.path.exists(world_production):
-        console.print("[green]✓ Using existing world-production folder[/green]")
-        console.print("[dim]  To reset, use 'Reset Production World' option[/dim]")
+    # Step 3: Copy backup to working directory
+    console.print("\n[bold]Step 3/4: Setting up world data...[/bold]")
+
+    # World folder pairs: (backup, working)
+    world_pairs = [
+        ("world-production", "world-local"),
+        ("world-production_nether", "world-local_nether"),
+        ("world-production_the_end", "world-local_the_end"),
+    ]
+
+    backup_exists = os.path.exists(os.path.join(SCRIPT_DIR, "world-production"))
+    working_exists = os.path.exists(os.path.join(SCRIPT_DIR, "world-local"))
+
+    if backup_exists and not working_exists:
+        # Copy backup to working directory
+        console.print("[cyan]Copying backup to working directory...[/cyan]")
+        for backup_name, working_name in world_pairs:
+            backup_path = os.path.join(SCRIPT_DIR, backup_name)
+            working_path = os.path.join(SCRIPT_DIR, working_name)
+            if os.path.exists(backup_path):
+                console.print(f"  Copying {backup_name} → {working_name}...")
+                shutil.copytree(backup_path, working_path)
+                console.print(f"  [green]✓ {working_name}[/green]")
+        console.print("[green]✓ Working copy created from backup[/green]")
+    elif backup_exists and working_exists:
+        console.print("[green]✓ Using existing working copy (world-local)[/green]")
+        console.print("[dim]  To reset from backup, use 'Reset Local World' option[/dim]")
+    elif not backup_exists and working_exists:
+        console.print("[yellow]⚠ No backup found, using existing world-local[/yellow]")
+        console.print("[dim]  Run 'world-download' from MCC to get production backup[/dim]")
     else:
-        console.print("[yellow]⚠ world-production will be generated on first start[/yellow]")
-        console.print("[dim]  Or use 'Download Production World' to sync from server[/dim]")
+        console.print("[yellow]⚠ No world data found[/yellow]")
+        console.print("[dim]  Run 'world-download' from MCC to get production backup,[/dim]")
+        console.print("[dim]  or a new world will be generated on first start.[/dim]")
+
+    # Step 4: Summary
+    console.print("\n[bold]Step 4/4: Verification...[/bold]")
+    console.print("[green]✓ Server will use: world-local[/green]")
+    console.print("[dim]  Backup preserved: world-production[/dim]")
 
     # Summary
     console.print("\n" + "="*50)
@@ -838,6 +870,69 @@ def reset_world(mode):
     return True
 
 
+def reset_local_world():
+    """Reset world-local by copying fresh from world-production backup"""
+    from rich.prompt import Confirm
+
+    # World folder pairs: (backup, working)
+    world_pairs = [
+        ("world-production", "world-local"),
+        ("world-production_nether", "world-local_nether"),
+        ("world-production_the_end", "world-local_the_end"),
+    ]
+
+    backup_path = os.path.join(SCRIPT_DIR, "world-production")
+    working_path = os.path.join(SCRIPT_DIR, "world-local")
+
+    if not os.path.exists(backup_path):
+        console.print("[red]Error: No backup found (world-production)[/red]")
+        console.print("[dim]Run 'world-download' from MCC first to get production backup.[/dim]")
+        return False
+
+    # Check what exists
+    existing_working = [name for _, name in world_pairs
+                        if os.path.exists(os.path.join(SCRIPT_DIR, name))]
+
+    console.print(Panel(
+        "[bold yellow]Reset Local World[/bold yellow]\n\n"
+        "This will:\n"
+        "  1. Delete current world-local folders\n"
+        "  2. Copy fresh data from world-production backup\n\n"
+        "[dim]The backup (world-production) will NOT be modified.[/dim]",
+        title="[yellow]⚠ Reset Working Copy[/yellow]",
+        border_style="yellow"
+    ))
+
+    if existing_working:
+        console.print("\n[yellow]Will be deleted:[/yellow]")
+        for name in existing_working:
+            console.print(f"  • {name}/")
+
+    if not Confirm.ask("\n[yellow]Reset local world from backup?[/yellow]"):
+        console.print("[dim]Cancelled.[/dim]")
+        return False
+
+    # Delete existing working folders
+    for _, working_name in world_pairs:
+        working = os.path.join(SCRIPT_DIR, working_name)
+        if os.path.exists(working):
+            console.print(f"[cyan]Deleting {working_name}...[/cyan]")
+            shutil.rmtree(working)
+
+    # Copy from backup
+    console.print("\n[cyan]Copying from backup...[/cyan]")
+    for backup_name, working_name in world_pairs:
+        backup = os.path.join(SCRIPT_DIR, backup_name)
+        working = os.path.join(SCRIPT_DIR, working_name)
+        if os.path.exists(backup):
+            console.print(f"  {backup_name} → {working_name}...")
+            shutil.copytree(backup, working)
+            console.print(f"  [green]✓ {working_name}[/green]")
+
+    console.print("\n[green]✓ Local world reset from backup[/green]")
+    return True
+
+
 # =============================================================================
 # Utility Functions
 # =============================================================================
@@ -924,13 +1019,14 @@ def interactive_menu():
         table.add_row("4", "Switch to Test Mode")
         table.add_row("", "")
         table.add_row("", "[dim]── World ──[/dim]")
-        table.add_row("5", "Download Production World")
-        table.add_row("6", "Reset Test World")
-        table.add_row("7", "Reset Production World")
+        table.add_row("5", "[dim]Download Backup (use MCC/server-config.py)[/dim]")
+        table.add_row("6", "Reset Local World (from backup)")
+        table.add_row("7", "Reset Test World")
+        table.add_row("8", "[red]Delete Production Backup[/red]")
         table.add_row("", "")
         table.add_row("", "[dim]── Utilities ──[/dim]")
-        table.add_row("8", "Clear Mods (keep Fabric API)")
-        table.add_row("9", "Send RCON Command")
+        table.add_row("9", "Clear Mods (keep Fabric API)")
+        table.add_row("r", "Send RCON Command")
         table.add_row("s", "Show Status")
         table.add_row("", "")
         table.add_row("q", "Quit")
@@ -938,7 +1034,7 @@ def interactive_menu():
         console.print(table)
         console.print()
 
-        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "s", "q"], default="q")
+        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "s", "q"], default="q")
 
         if choice == "1":
             start_server()
@@ -957,22 +1053,28 @@ def interactive_menu():
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "5":
-            download_world()
+            console.print("\n[yellow]This command has moved to MCC/server-config.py[/yellow]")
+            console.print("[cyan]Run from MCC directory:[/cyan]")
+            console.print("  python server-config.py world-download")
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "6":
-            reset_world("test")
+            reset_local_world()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "7":
-            reset_world("production")
+            reset_world("test")
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "8":
-            clear_mods()
+            reset_world("production")
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "9":
+            clear_mods()
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "r":
             cmd = Prompt.ask("Enter RCON command")
             if cmd:
                 response = send_rcon_command(cmd)
@@ -1016,6 +1118,11 @@ if __name__ == "__main__":
             else:
                 console.print(f"[red]Unknown mode: {sys.argv[2]}[/red]")
         elif command == "download-world":
+            console.print("[yellow]DEPRECATED: This command has moved to MCC/server-config.py[/yellow]")
+            console.print("[cyan]Run from MCC directory:[/cyan]")
+            console.print("  python server-config.py world-download")
+            console.print()
+            # Still run for backwards compatibility
             auto_yes = "-y" in sys.argv or "--yes" in sys.argv
             no_backup = "--no-backup" in sys.argv
             download_world(backup_existing=not no_backup, auto_confirm=auto_yes)
@@ -1024,6 +1131,8 @@ if __name__ == "__main__":
                 console.print("[yellow]Usage: python server-config.py reset-world <test|production>[/yellow]")
             else:
                 reset_world(sys.argv[2])
+        elif command == "reset-local":
+            reset_local_world()
         elif command == "clear-mods":
             clear_mods()
         elif command == "rcon":
@@ -1046,8 +1155,12 @@ if __name__ == "__main__":
             console.print("  python server-config.py mode test        # Switch to test mode")
             console.print("")
             console.print("[yellow]World:[/yellow]")
-            console.print("  python server-config.py download-world [--no-backup] [-y]  # Download production world")
+            console.print("  python server-config.py reset-local                        # Reset world-local from backup")
             console.print("  python server-config.py reset-world <test|production>      # Delete world folders")
+            console.print("")
+            console.print("[dim]Note: Backup sync commands are in MCC/server-config.py:[/dim]")
+            console.print("[dim]  world-download  - Download production → world-production (backup)[/dim]")
+            console.print("[dim]  world-upload    - Upload world-production → production server[/dim]")
             console.print("")
             console.print("[yellow]Utilities:[/yellow]")
             console.print("  python server-config.py clear-mods   # Remove non-API mods")
