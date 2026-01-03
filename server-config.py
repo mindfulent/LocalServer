@@ -117,6 +117,176 @@ SFTP_PORT = int(os.environ.get("SFTP_PORT", "2022"))
 SFTP_USERNAME = os.environ.get("SFTP_USERNAME", "")
 SFTP_PASSWORD = os.environ.get("SFTP_PASSWORD", "")
 
+
+# =============================================================================
+# Git Helpers (for MCC version management)
+# =============================================================================
+
+def get_mcc_git_tags():
+    """Get all version tags from MCC repository, sorted by version number descending."""
+    try:
+        result = subprocess.run(
+            ["git", "tag", "--list", "v*"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return []
+
+        tags = [t.strip() for t in result.stdout.strip().split('\n') if t.strip()]
+
+        # Sort by version number (v0.9.1, v0.9.2, ... v0.9.10, v0.9.11)
+        def version_key(tag):
+            # Extract version numbers from tag like "v0.9.32"
+            parts = tag.lstrip('v').split('.')
+            try:
+                return tuple(int(p) for p in parts)
+            except ValueError:
+                return (0, 0, 0)
+
+        tags.sort(key=version_key, reverse=True)
+        return tags
+    except Exception:
+        return []
+
+
+def get_mcc_current_version():
+    """Get the current version/branch of MCC repository."""
+    try:
+        # First try to get exact tag if HEAD is at a tag
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--exact-match", "HEAD"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            return result.stdout.strip(), "tag"
+
+        # Otherwise get current branch
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip(), "branch"
+
+        # Fallback: detached HEAD, show short commit
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            return result.stdout.strip(), "commit"
+
+        return "unknown", "unknown"
+    except Exception:
+        return "unknown", "unknown"
+
+
+def is_mcc_dirty():
+    """Check if MCC repository has uncommitted changes."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
+
+
+def get_mcc_dirty_summary():
+    """Get a brief summary of uncommitted changes in MCC."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return []
+
+        lines = result.stdout.strip().split('\n')
+        return [l.strip() for l in lines if l.strip()][:10]  # Max 10 lines
+    except Exception:
+        return []
+
+
+def stash_mcc_changes():
+    """Stash uncommitted changes in MCC repository."""
+    try:
+        result = subprocess.run(
+            ["git", "stash", "push", "-m", "LocalServer: auto-stash before version switch"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def checkout_mcc_version(tag):
+    """Checkout a specific tag in MCC repository."""
+    try:
+        result = subprocess.run(
+            ["git", "checkout", tag],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return result.returncode == 0, result.stderr.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def has_mcc_stash():
+    """Check if there are stashed changes in MCC (from our auto-stash)."""
+    try:
+        result = subprocess.run(
+            ["git", "stash", "list"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        # Look for our auto-stash message
+        return "LocalServer: auto-stash" in result.stdout
+    except Exception:
+        return False
+
+
+def pop_mcc_stash():
+    """Pop the most recent stash in MCC repository."""
+    try:
+        result = subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return result.returncode == 0, result.stderr.strip() if result.stderr else result.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+
 # Java path (can be overridden via env)
 JAVA_PATH = os.environ.get("JAVA_PATH", DEFAULT_JAVA)
 
@@ -566,9 +736,25 @@ def sync_mods_full():
     This handles the complete mrpack format where:
     - Some mods are bundled in overrides/mods/
     - Other mods are referenced by URL in the manifest
+
+    Also removes stale mods that are no longer in the pack.
     """
     import zipfile
     import json
+    from rich.prompt import Confirm
+
+    # Check if server is running - can't sync while mods are in use
+    if is_server_running():
+        console.print("[yellow]Server is currently running![/yellow]")
+        console.print("[dim]Mod files are locked while the server is running.[/dim]")
+        if not Confirm.ask("Stop server before syncing?"):
+            console.print("[dim]Sync cancelled.[/dim]")
+            return False
+        stop_server()
+        # Wait a moment for server to release files
+        import time
+        console.print("[dim]Waiting for server to stop...[/dim]")
+        time.sleep(3)
 
     mrpack_path = find_latest_mrpack(auto_export=True)
     if not mrpack_path:
@@ -588,12 +774,52 @@ def sync_mods_full():
     skipped_count = 0
     failed_count = 0
     config_count = 0
+    removed_count = 0
+    stale_locked_count = 0
 
     try:
         with zipfile.ZipFile(mrpack_path, 'r') as zf:
             # Read manifest
             manifest_data = zf.read('modrinth.index.json')
             manifest = json.loads(manifest_data)
+
+            # Build set of expected mod filenames from mrpack
+            expected_mods = set()
+
+            # From bundled overrides
+            for name in zf.namelist():
+                if name.startswith('overrides/mods/') and name.endswith('.jar'):
+                    filename = os.path.basename(name)
+                    if filename:
+                        expected_mods.add(filename)
+
+            # From manifest downloads
+            for file_info in manifest.get('files', []):
+                path = file_info.get('path', '')
+                if path.startswith('mods/') and path.endswith('.jar'):
+                    expected_mods.add(os.path.basename(path))
+
+            # 0. Remove stale mods not in the mrpack
+            console.print("[cyan]Checking for stale mods...[/cyan]")
+            if os.path.exists(mods_dir):
+                existing_jars = [f for f in os.listdir(mods_dir) if f.endswith('.jar')]
+                for jar in existing_jars:
+                    if jar not in expected_mods:
+                        jar_path = os.path.join(mods_dir, jar)
+                        try:
+                            os.remove(jar_path)
+                            console.print(f"[yellow]  Removed stale: {jar}[/yellow]")
+                            removed_count += 1
+                        except PermissionError:
+                            console.print(f"[red]  Cannot remove (in use): {jar}[/red]")
+                            stale_locked_count += 1
+
+            if removed_count > 0:
+                console.print(f"[green]✓ Removed {removed_count} stale mod(s)[/green]")
+            if stale_locked_count > 0:
+                console.print(f"[red]✗ {stale_locked_count} stale mod(s) locked - stop server and retry[/red]")
+            if removed_count == 0 and stale_locked_count == 0:
+                console.print("[dim]  No stale mods found[/dim]")
 
             # 1. Extract bundled files from overrides/
             for name in zf.namelist():
@@ -649,6 +875,10 @@ def sync_mods_full():
 
             # Summary
             console.print(f"\n[green]✓ Sync complete:[/green]")
+            if removed_count > 0:
+                console.print(f"  • Stale mods removed: {removed_count}")
+            if stale_locked_count > 0:
+                console.print(f"  [red]• Stale mods locked (couldn't remove): {stale_locked_count}[/red]")
             console.print(f"  • Bundled mods extracted: {bundled_count}")
             console.print(f"  • Mods downloaded: {downloaded_count}")
             if skipped_count > 0:
@@ -852,14 +1082,21 @@ def switch_to_production_mode():
         console.print(f"[red]Error: {props_production} not found![/red]")
         return False
 
-    # Step 1: Switch server.properties
-    console.print("\n[bold]Step 1/4: Switching to production server.properties...[/bold]")
+    # Step 1: Restore packwiz-installer if disabled
+    console.print("\n[bold]Step 1/5: Checking packwiz-installer...[/bold]")
+    if restore_packwiz_installer():
+        console.print("[dim]  (Was disabled from Vanilla mode)[/dim]")
+    else:
+        console.print("[dim]  Packwiz-installer ready[/dim]")
+
+    # Step 2: Switch server.properties
+    console.print("\n[bold]Step 2/5: Switching to production server.properties...[/bold]")
     props_file = os.path.join(SCRIPT_DIR, "server.properties")
     shutil.copy(props_production, props_file)
     console.print("[green]✓ server.properties updated[/green]")
 
-    # Step 2: Sync configs from MCC
-    console.print("\n[bold]Step 2/4: Syncing configs from MCC...[/bold]")
+    # Step 3: Sync configs from MCC
+    console.print("\n[bold]Step 3/5: Syncing configs from MCC...[/bold]")
     mcc_config = os.path.join(MCC_DIR, "config")
     local_config = os.path.join(SCRIPT_DIR, "config")
 
@@ -880,8 +1117,8 @@ def switch_to_production_mode():
     else:
         console.print("[yellow]⚠ MCC config folder not found, skipping sync[/yellow]")
 
-    # Step 3: Copy backup to working directory
-    console.print("\n[bold]Step 3/4: Setting up world data...[/bold]")
+    # Step 4: Copy backup to working directory
+    console.print("\n[bold]Step 4/5: Setting up world data...[/bold]")
 
     # World folder pairs: (backup, working)
     world_pairs = [
@@ -915,8 +1152,8 @@ def switch_to_production_mode():
         console.print("[dim]  Run 'world-download' from MCC to get production backup,[/dim]")
         console.print("[dim]  or a new world will be generated on first start.[/dim]")
 
-    # Step 4: Summary
-    console.print("\n[bold]Step 4/4: Verification...[/bold]")
+    # Step 5: Summary
+    console.print("\n[bold]Step 5/5: Verification...[/bold]")
     console.print("[green]✓ Server will use: world-local[/green]")
     console.print("[dim]  Backup preserved: world-production[/dim]")
 
@@ -958,8 +1195,15 @@ def switch_to_fresh_mode():
         console.print(f"[red]Error: {props_fresh} not found![/red]")
         return False
 
-    # Switch server.properties
-    console.print("\n[bold]Switching to fresh world server.properties...[/bold]")
+    # Step 1: Restore packwiz-installer if disabled
+    console.print("\n[bold]Step 1/2: Checking packwiz-installer...[/bold]")
+    if restore_packwiz_installer():
+        console.print("[dim]  (Was disabled from Vanilla mode)[/dim]")
+    else:
+        console.print("[dim]  Packwiz-installer ready[/dim]")
+
+    # Step 2: Switch server.properties
+    console.print("\n[bold]Step 2/2: Switching to fresh world server.properties...[/bold]")
     props_file = os.path.join(SCRIPT_DIR, "server.properties")
     shutil.copy(props_fresh, props_file)
     console.print("[green]✓ server.properties updated[/green]")
@@ -988,8 +1232,9 @@ def switch_to_vanilla_mode():
         "Fabric-only testing (no modpack mods):\n"
         "  • Fresh world (normal terrain generation)\n"
         "  • Only Fabric API installed\n"
+        "  • Packwiz-installer disabled\n"
         "  • Good for isolating mod issues\n\n"
-        "[yellow]Note: This clears all mods except Fabric API.[/yellow]",
+        "[yellow]Note: This clears all mods and disables packwiz sync.[/yellow]",
         title="[yellow]Mode Switch[/yellow]",
         border_style="yellow"
     ))
@@ -1006,8 +1251,30 @@ def switch_to_vanilla_mode():
     shutil.copy(props_vanilla, props_file)
     console.print("[green]✓ server.properties updated[/green]")
 
+    # Disable packwiz-installer to prevent mods from being re-downloaded
+    console.print("\n[bold]Step 2/3: Disabling packwiz-installer...[/bold]")
+    packwiz_bootstrap = os.path.join(SCRIPT_DIR, "packwiz-installer-bootstrap.jar")
+    packwiz_bootstrap_disabled = packwiz_bootstrap + ".disabled"
+    packwiz_json = os.path.join(SCRIPT_DIR, "packwiz.json")
+    packwiz_json_backup = packwiz_json + ".backup"
+
+    if os.path.exists(packwiz_bootstrap):
+        os.rename(packwiz_bootstrap, packwiz_bootstrap_disabled)
+        console.print("[green]✓ Renamed packwiz-installer-bootstrap.jar → .disabled[/green]")
+    elif os.path.exists(packwiz_bootstrap_disabled):
+        console.print("[dim]  packwiz-installer already disabled[/dim]")
+    else:
+        console.print("[dim]  packwiz-installer-bootstrap.jar not found[/dim]")
+
+    # Backup packwiz.json to prevent cache from being used
+    if os.path.exists(packwiz_json):
+        if os.path.exists(packwiz_json_backup):
+            os.remove(packwiz_json_backup)
+        os.rename(packwiz_json, packwiz_json_backup)
+        console.print("[green]✓ Backed up packwiz.json[/green]")
+
     # Clear mods (keep only Fabric API)
-    console.print("\n[bold]Step 2/2: Clearing mods (keeping Fabric API)...[/bold]")
+    console.print("\n[bold]Step 3/3: Clearing mods (keeping Fabric API)...[/bold]")
     mods_dir = os.path.join(SCRIPT_DIR, "mods")
     if os.path.exists(mods_dir):
         all_jars = [f for f in os.listdir(mods_dir) if f.endswith('.jar')]
@@ -1048,10 +1315,283 @@ def switch_to_vanilla_mode():
     console.print("\n" + "="*50)
     console.print("[bold green]✓ Vanilla Debug Mode Ready[/bold green]")
     console.print("[dim]World folder: world-vanilla/[/dim]")
+    console.print("[dim]Packwiz-installer: disabled[/dim]")
     console.print("[dim]To restore mods: Switch to Production or Fresh mode[/dim]")
     console.print("="*50)
 
     return True
+
+
+def restore_packwiz_installer():
+    """Re-enable packwiz-installer if it was disabled for vanilla mode."""
+    packwiz_bootstrap = os.path.join(SCRIPT_DIR, "packwiz-installer-bootstrap.jar")
+    packwiz_bootstrap_disabled = packwiz_bootstrap + ".disabled"
+    packwiz_json = os.path.join(SCRIPT_DIR, "packwiz.json")
+    packwiz_json_backup = packwiz_json + ".backup"
+
+    restored = False
+
+    # Restore packwiz-installer-bootstrap.jar
+    if os.path.exists(packwiz_bootstrap_disabled):
+        if os.path.exists(packwiz_bootstrap):
+            os.remove(packwiz_bootstrap_disabled)  # Already exists, just remove disabled copy
+        else:
+            os.rename(packwiz_bootstrap_disabled, packwiz_bootstrap)
+        console.print("[green]✓ Restored packwiz-installer-bootstrap.jar[/green]")
+        restored = True
+
+    # Restore packwiz.json
+    if os.path.exists(packwiz_json_backup):
+        if os.path.exists(packwiz_json):
+            os.remove(packwiz_json_backup)  # Already exists, just remove backup
+        else:
+            os.rename(packwiz_json_backup, packwiz_json)
+        console.print("[green]✓ Restored packwiz.json[/green]")
+        restored = True
+
+    return restored
+
+
+# =============================================================================
+# Modpack Version Management
+# =============================================================================
+
+def list_versions():
+    """Display available MCC modpack versions."""
+    console.print(Panel(
+        "[bold]MCC Modpack Versions[/bold]\n\n"
+        "Available versions from the MCC git repository.\n"
+        "Switch to test older versions or validate releases.",
+        title="[cyan]Version List[/cyan]",
+        border_style="cyan"
+    ))
+
+    # Get current version
+    current_version, version_type = get_mcc_current_version()
+    is_dirty = is_mcc_dirty()
+
+    # Display current state
+    if version_type == "tag":
+        console.print(f"\n[bold]Current:[/bold] [green]{current_version}[/green] (release tag)")
+    elif version_type == "branch":
+        console.print(f"\n[bold]Current:[/bold] [cyan]{current_version}[/cyan] (branch)")
+    else:
+        console.print(f"\n[bold]Current:[/bold] [yellow]{current_version}[/yellow] (detached)")
+
+    if is_dirty:
+        console.print("[yellow]⚠ Uncommitted changes present[/yellow]")
+
+    # Get and display tags
+    tags = get_mcc_git_tags()
+    if not tags:
+        console.print("\n[red]No version tags found in MCC repository[/red]")
+        console.print("[dim]Make sure MCC directory exists and has git tags[/dim]")
+        return False
+
+    console.print(f"\n[bold]Available Versions:[/bold] ({len(tags)} releases)\n")
+
+    # Display in columns for readability
+    table = Table(show_header=False, box=box.SIMPLE, padding=(0, 3))
+    table.add_column("Version", style="white")
+    table.add_column("Version", style="white")
+    table.add_column("Version", style="white")
+    table.add_column("Version", style="white")
+
+    # Group tags into rows of 4
+    for i in range(0, len(tags), 4):
+        row = tags[i:i+4]
+        # Mark current version
+        row_display = []
+        for tag in row:
+            if tag == current_version:
+                row_display.append(f"[green]{tag}[/green] ←")
+            else:
+                row_display.append(tag)
+        # Pad row to 4 items
+        while len(row_display) < 4:
+            row_display.append("")
+        table.add_row(*row_display)
+
+    console.print(table)
+    console.print(f"\n[dim]Use 'c' to change version, or CLI: python server-config.py version <tag>[/dim]")
+    return True
+
+
+def switch_version(target_version, auto_confirm=False):
+    """Switch MCC to a specific version tag."""
+    from rich.prompt import Confirm
+
+    # Validate target version exists
+    tags = get_mcc_git_tags()
+    if not tags:
+        console.print("[red]Error: No version tags found in MCC repository[/red]")
+        return False
+
+    # Normalize version input (allow "0.9.32" or "v0.9.32")
+    if not target_version.startswith('v'):
+        target_version = f"v{target_version}"
+
+    if target_version not in tags:
+        console.print(f"[red]Error: Version '{target_version}' not found[/red]")
+        console.print(f"[dim]Available versions: {', '.join(tags[:10])}{'...' if len(tags) > 10 else ''}[/dim]")
+        return False
+
+    # Get current state
+    current_version, version_type = get_mcc_current_version()
+
+    if current_version == target_version:
+        console.print(f"[yellow]Already on version {target_version}[/yellow]")
+        return True
+
+    console.print(Panel(
+        f"[bold]Switch MCC Version[/bold]\n\n"
+        f"Current: [cyan]{current_version}[/cyan] ({version_type})\n"
+        f"Target:  [green]{target_version}[/green]\n\n"
+        f"This will checkout the tag in MCC and sync mods.",
+        title="[cyan]Version Switch[/cyan]",
+        border_style="cyan"
+    ))
+
+    # Check for uncommitted changes
+    if is_mcc_dirty():
+        dirty_files = get_mcc_dirty_summary()
+        console.print("\n[yellow]⚠ MCC has uncommitted changes:[/yellow]")
+        for f in dirty_files:
+            console.print(f"  [dim]{f}[/dim]")
+        if len(dirty_files) == 10:
+            console.print("  [dim]... (more files)[/dim]")
+
+        if not auto_confirm:
+            if not Confirm.ask("\n[yellow]Stash changes and continue?[/yellow]"):
+                console.print("[dim]Cancelled.[/dim]")
+                return False
+
+        console.print("\n[cyan]Stashing changes...[/cyan]")
+        if stash_mcc_changes():
+            console.print("[green]✓ Changes stashed[/green]")
+            console.print("[dim]  Restore later with: cd MCC && git stash pop[/dim]")
+        else:
+            console.print("[red]Failed to stash changes[/red]")
+            return False
+
+    # Perform checkout
+    console.print(f"\n[cyan]Checking out {target_version}...[/cyan]")
+    success, error_msg = checkout_mcc_version(target_version)
+
+    if not success:
+        console.print(f"[red]Checkout failed: {error_msg}[/red]")
+        return False
+
+    console.print(f"[green]✓ Switched to {target_version}[/green]")
+
+    # Delete old mrpack files to force fresh export
+    console.print("\n[cyan]Cleaning old mrpack files...[/cyan]")
+    import glob
+    old_mrpacks = glob.glob(os.path.join(MCC_DIR, "MCC-*.mrpack"))
+    for mrpack in old_mrpacks:
+        try:
+            os.remove(mrpack)
+        except Exception:
+            pass
+    console.print(f"[green]✓ Removed {len(old_mrpacks)} old mrpack file(s)[/green]")
+
+    # Auto-sync mods
+    console.print("\n[bold]Syncing mods for this version...[/bold]")
+    sync_success = sync_mods_full()
+
+    # Summary
+    console.print("\n" + "="*50)
+    if sync_success:
+        console.print(f"[bold green]✓ Switched to MCC {target_version}[/bold green]")
+        console.print("[dim]Mods synced. Start the server to test this version.[/dim]")
+    else:
+        console.print(f"[bold yellow]⚠ Switched to {target_version} but mod sync had issues[/bold yellow]")
+        console.print("[dim]Check mod sync output above for details.[/dim]")
+    console.print("="*50)
+
+    return sync_success
+
+
+def return_to_main():
+    """Return MCC to main branch and optionally restore stashed changes."""
+    from rich.prompt import Confirm
+
+    current_version, version_type = get_mcc_current_version()
+
+    # Check if already on main
+    if version_type == "branch" and current_version == "main":
+        console.print("[yellow]Already on main branch[/yellow]")
+
+        # Still offer to pop stash if one exists
+        if has_mcc_stash():
+            if Confirm.ask("\n[cyan]Found stashed changes. Restore them?[/cyan]"):
+                success, msg = pop_mcc_stash()
+                if success:
+                    console.print("[green]✓ Stashed changes restored[/green]")
+                else:
+                    console.print(f"[red]Failed to restore stash: {msg}[/red]")
+        return True
+
+    console.print(Panel(
+        f"[bold]Return to Main Branch[/bold]\n\n"
+        f"Current: [yellow]{current_version}[/yellow] ({version_type})\n"
+        f"Target:  [green]main[/green] (latest development)\n\n"
+        f"This will checkout main and sync mods.",
+        title="[cyan]Version Switch[/cyan]",
+        border_style="cyan"
+    ))
+
+    # Check for stashed changes
+    has_stash = has_mcc_stash()
+    if has_stash:
+        console.print("\n[cyan]ℹ Found stashed changes from previous version switch[/cyan]")
+
+    # Perform checkout
+    console.print(f"\n[cyan]Checking out main...[/cyan]")
+    success, error_msg = checkout_mcc_version("main")
+
+    if not success:
+        console.print(f"[red]Checkout failed: {error_msg}[/red]")
+        return False
+
+    console.print(f"[green]✓ Switched to main[/green]")
+
+    # Offer to restore stashed changes
+    if has_stash:
+        if Confirm.ask("\n[cyan]Restore stashed changes?[/cyan]", default=True):
+            success, msg = pop_mcc_stash()
+            if success:
+                console.print("[green]✓ Stashed changes restored[/green]")
+            else:
+                console.print(f"[yellow]⚠ Could not restore stash: {msg}[/yellow]")
+                console.print("[dim]You can manually run: cd MCC && git stash pop[/dim]")
+
+    # Delete old mrpack files to force fresh export
+    console.print("\n[cyan]Cleaning old mrpack files...[/cyan]")
+    import glob
+    old_mrpacks = glob.glob(os.path.join(MCC_DIR, "MCC-*.mrpack"))
+    for mrpack in old_mrpacks:
+        try:
+            os.remove(mrpack)
+        except Exception:
+            pass
+    console.print(f"[green]✓ Removed {len(old_mrpacks)} old mrpack file(s)[/green]")
+
+    # Auto-sync mods
+    console.print("\n[bold]Syncing mods from main...[/bold]")
+    sync_success = sync_mods_full()
+
+    # Summary
+    console.print("\n" + "="*50)
+    if sync_success:
+        console.print("[bold green]✓ Returned to main branch[/bold green]")
+        console.print("[dim]Mods synced. Ready for development.[/dim]")
+    else:
+        console.print("[bold yellow]⚠ Returned to main but mod sync had issues[/bold yellow]")
+        console.print("[dim]Check mod sync output above for details.[/dim]")
+    console.print("="*50)
+
+    return sync_success
 
 
 # =============================================================================
@@ -1439,7 +1979,14 @@ def interactive_menu():
         status_color = "green" if running else "red"
         status_text = "RUNNING" if running else "STOPPED"
 
-        console.print(f"\nMode: [{mode_color}]{mode.upper()}[/{mode_color}] | Server: [{status_color}]{status_text}[/{status_color}]")
+        # Show MCC version
+        mcc_version, mcc_type = get_mcc_current_version()
+        mcc_dirty = is_mcc_dirty()
+        mcc_display = f"[magenta]{mcc_version}[/magenta]"
+        if mcc_dirty:
+            mcc_display += " [yellow]*[/yellow]"
+
+        console.print(f"\nMode: [{mode_color}]{mode.upper()}[/{mode_color}] | Server: [{status_color}]{status_text}[/{status_color}] | MCC: {mcc_display}")
         console.print()
 
         # Menu options
@@ -1460,7 +2007,11 @@ def interactive_menu():
         table.add_row("4", "Reset Local World (from backup)")
         table.add_row("5", "Delete Fresh World")
         table.add_row("6", "Delete Vanilla World")
-        table.add_row("7", "[red]Delete Production Backup[/red]")
+        table.add_row("", "")
+        table.add_row("", "[dim]── Modpack Version ──[/dim]")
+        table.add_row("l", "List Versions")
+        table.add_row("c", "Change Version")
+        table.add_row("b", "Back to Main Branch")
         table.add_row("", "")
         table.add_row("", "[dim]── Utilities ──[/dim]")
         table.add_row("m", "Sync Mods (from mrpack)")
@@ -1472,7 +2023,7 @@ def interactive_menu():
         console.print(table)
         console.print()
 
-        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "p", "f", "v", "m", "r", "s", "q"], default="q")
+        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "p", "f", "v", "l", "c", "b", "m", "r", "s", "q"], default="q")
 
         if choice == "1":
             start_server()
@@ -1512,8 +2063,19 @@ def interactive_menu():
             reset_world("vanilla")
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
-        elif choice == "7":
-            reset_world("production")
+        elif choice == "l":
+            list_versions()
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "c":
+            list_versions()
+            version = Prompt.ask("\nEnter version to switch to (e.g., v0.9.32)")
+            if version:
+                switch_version(version)
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "b":
+            return_to_main()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "m":
@@ -1576,6 +2138,21 @@ if __name__ == "__main__":
             clear_mods()
         elif command == "sync-mods":
             sync_mods_full()
+        elif command == "version":
+            if len(sys.argv) < 3:
+                # No subcommand, show current version
+                version, vtype = get_mcc_current_version()
+                console.print(f"[bold]MCC Version:[/bold] [cyan]{version}[/cyan] ({vtype})")
+                if is_mcc_dirty():
+                    console.print("[yellow]⚠ Uncommitted changes present[/yellow]")
+            elif sys.argv[2] == "list":
+                list_versions()
+            elif sys.argv[2] == "main":
+                # Special case: return to main branch
+                return_to_main()
+            else:
+                # Treat as version tag to switch to
+                switch_version(sys.argv[2])
         elif command == "rcon":
             if len(sys.argv) < 3:
                 console.print("[yellow]Usage: python server-config.py rcon <command>[/yellow]")
@@ -1604,6 +2181,12 @@ if __name__ == "__main__":
             console.print("[dim]Note: Backup sync commands are in MCC/server-config.py:[/dim]")
             console.print("[dim]  world-download  - Download production → world-production (backup)[/dim]")
             console.print("[dim]  world-upload    - Upload world-production → production server[/dim]")
+            console.print("")
+            console.print("[yellow]Modpack Version:[/yellow]")
+            console.print("  python server-config.py version          # Show current MCC version")
+            console.print("  python server-config.py version list     # List available versions")
+            console.print("  python server-config.py version <tag>    # Switch to specific version")
+            console.print("  python server-config.py version main     # Return to main branch")
             console.print("")
             console.print("[yellow]Utilities:[/yellow]")
             console.print("  python server-config.py sync-mods    # Sync mods from mrpack")
