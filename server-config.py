@@ -449,18 +449,39 @@ def start_server():
     if not is_vanilla:
         packwiz_bootstrap = os.path.join(SCRIPT_DIR, "packwiz-installer-bootstrap.jar")
         if os.path.exists(packwiz_bootstrap):
-            console.print("[dim]Syncing mods from packwiz...[/dim]")
+            console.print("[cyan]Syncing mods from packwiz serve...[/cyan]")
             try:
-                subprocess.run(
+                result = subprocess.run(
                     [JAVA_PATH, "-jar", packwiz_bootstrap, "-g", "-s", "server", "http://localhost:8080/pack.toml"],
                     cwd=SCRIPT_DIR,
                     timeout=30,
-                    capture_output=True
+                    capture_output=True,
+                    text=True
                 )
+                if result.returncode != 0:
+                    console.print("[red]⚠ Packwiz sync failed![/red]")
+                    if result.stderr:
+                        console.print(f"[dim]{result.stderr[:500]}[/dim]")
+                    console.print("[yellow]Is 'packwiz serve' running in the MCC directory?[/yellow]")
+                    console.print("[yellow]Run: cd ../MCC && ./packwiz.exe serve[/yellow]")
+                    from rich.prompt import Confirm
+                    if not Confirm.ask("[yellow]Start server anyway (mods may be missing)?[/yellow]", default=False):
+                        return False
+                else:
+                    console.print("[green]✓ Mods synced[/green]")
             except subprocess.TimeoutExpired:
-                console.print("[yellow]Packwiz sync timed out (packwiz serve may not be running)[/yellow]")
+                console.print("[red]⚠ Packwiz sync timed out![/red]")
+                console.print("[yellow]Is 'packwiz serve' running? Run: cd ../MCC && ./packwiz.exe serve[/yellow]")
+                from rich.prompt import Confirm
+                if not Confirm.ask("[yellow]Start server anyway (mods may be missing)?[/yellow]", default=False):
+                    return False
             except Exception as e:
-                console.print(f"[yellow]Packwiz sync failed: {e}[/yellow]")
+                console.print(f"[red]⚠ Packwiz sync error: {e}[/red]")
+                from rich.prompt import Confirm
+                if not Confirm.ask("[yellow]Start server anyway (mods may be missing)?[/yellow]", default=False):
+                    return False
+        else:
+            console.print("[yellow]⚠ packwiz-installer-bootstrap.jar not found - skipping mod sync[/yellow]")
 
     # Build command
     cmd = [JAVA_PATH] + JVM_FLAGS + ["-jar", SERVER_JAR, "nogui"]
@@ -529,6 +550,17 @@ def send_rcon_command(cmd):
 
 def switch_to_production_mode():
     """Switch local server to production mode"""
+
+    # Check if mods are missing (e.g., coming from Vanilla mode)
+    mods_dir = os.path.join(SCRIPT_DIR, "mods")
+    if os.path.exists(mods_dir):
+        jar_count = len([f for f in os.listdir(mods_dir) if f.endswith('.jar')])
+        if jar_count < 5:
+            console.print("[yellow]⚠ Warning: Only {0} mod JAR(s) found in mods/[/yellow]".format(jar_count))
+            console.print("[yellow]  Mods will be restored when you start the server[/yellow]")
+            console.print("[yellow]  (requires 'packwiz serve' running in MCC directory)[/yellow]")
+            console.print()
+
     console.print(Panel(
         "[bold]Production Mode Setup[/bold]\n\n"
         "This mode replicates production settings:\n"
@@ -625,6 +657,17 @@ def switch_to_production_mode():
 
 def switch_to_fresh_mode():
     """Switch local server to fresh world mode"""
+
+    # Check if mods are missing (e.g., coming from Vanilla mode)
+    mods_dir = os.path.join(SCRIPT_DIR, "mods")
+    if os.path.exists(mods_dir):
+        jar_count = len([f for f in os.listdir(mods_dir) if f.endswith('.jar')])
+        if jar_count < 5:
+            console.print("[yellow]⚠ Warning: Only {0} mod JAR(s) found in mods/[/yellow]".format(jar_count))
+            console.print("[yellow]  Mods will be restored when you start the server[/yellow]")
+            console.print("[yellow]  (requires 'packwiz serve' running in MCC directory)[/yellow]")
+            console.print()
+
     console.print(Panel(
         "[bold]Fresh World Mode Setup[/bold]\n\n"
         "Clean slate testing with all mods:\n"
