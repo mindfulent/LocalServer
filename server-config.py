@@ -1907,6 +1907,37 @@ def reset_local_world():
 # Utility Functions
 # =============================================================================
 
+def grant_permissions(username):
+    """Grant all permissions to a player via LuckPerms.
+
+    This uses LuckPerms RCON commands since vanilla /op is disabled
+    when auto-op mode is enabled.
+    """
+    if not username:
+        console.print("[yellow]No username provided[/yellow]")
+        return False
+
+    if not is_server_running():
+        console.print("[yellow]Server is not running[/yellow]")
+        return False
+
+    console.print(f"[cyan]Granting permissions to {username}...[/cyan]")
+
+    # Grant wildcard permission
+    response1 = send_rcon_command(f"lp user {username} permission set * true")
+    if response1:
+        console.print(f"[dim]  {response1}[/dim]")
+
+    # Grant autoop permission
+    response2 = send_rcon_command(f"lp user {username} permission set luckperms.autoop true")
+    if response2:
+        console.print(f"[dim]  {response2}[/dim]")
+
+    console.print(f"[green]✓ Permissions granted to {username}[/green]")
+    console.print("[dim]  Player should relog to receive op status[/dim]")
+    return True
+
+
 def clear_mods():
     """Remove all mods except Fabric API"""
     from rich.prompt import Confirm
@@ -2015,6 +2046,7 @@ def interactive_menu():
         table.add_row("", "")
         table.add_row("", "[dim]── Utilities ──[/dim]")
         table.add_row("m", "Sync Mods (from mrpack)")
+        table.add_row("o", "Grant Permissions (op via LuckPerms)")
         table.add_row("r", "Send RCON Command")
         table.add_row("s", "Show Status")
         table.add_row("", "")
@@ -2023,7 +2055,7 @@ def interactive_menu():
         console.print(table)
         console.print()
 
-        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "p", "f", "v", "l", "c", "b", "m", "r", "s", "q"], default="q")
+        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "p", "f", "v", "l", "c", "b", "m", "o", "r", "s", "q"], default="q")
 
         if choice == "1":
             start_server()
@@ -2080,6 +2112,12 @@ def interactive_menu():
 
         elif choice == "m":
             sync_mods_full()
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "o":
+            username = Prompt.ask("Enter Minecraft username")
+            if username:
+                grant_permissions(username)
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "r":
@@ -2161,6 +2199,11 @@ if __name__ == "__main__":
                 response = send_rcon_command(cmd)
                 if response:
                     console.print(response)
+        elif command == "grant-perms" or command == "op":
+            if len(sys.argv) < 3:
+                console.print("[yellow]Usage: python server-config.py grant-perms <username>[/yellow]")
+            else:
+                grant_permissions(sys.argv[2])
         else:
             console.print("[yellow]Usage:[/yellow]")
             console.print("  python server-config.py              # Interactive menu")
@@ -2189,8 +2232,9 @@ if __name__ == "__main__":
             console.print("  python server-config.py version main     # Return to main branch")
             console.print("")
             console.print("[yellow]Utilities:[/yellow]")
-            console.print("  python server-config.py sync-mods    # Sync mods from mrpack")
-            console.print("  python server-config.py clear-mods   # Remove non-API mods")
-            console.print("  python server-config.py rcon <cmd>   # Send RCON command")
+            console.print("  python server-config.py sync-mods        # Sync mods from mrpack")
+            console.print("  python server-config.py clear-mods       # Remove non-API mods")
+            console.print("  python server-config.py grant-perms <user>  # Grant op via LuckPerms")
+            console.print("  python server-config.py rcon <cmd>       # Send RCON command")
     else:
         interactive_menu()
