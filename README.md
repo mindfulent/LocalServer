@@ -5,7 +5,7 @@ Local Minecraft 1.21.1 Fabric test server for validating [MCC modpack](https://g
 ## Features
 
 - **Fabric 1.21.1** with optimized JVM flags (Aikar's G1GC tuning)
-- **Packwiz integration** - Auto-syncs mods from `packwiz serve`
+- **Auto-sync from mrpack** - Extracts mods directly from `.mrpack` file (no API restrictions)
 - **Offline mode** - No authentication for faster testing
 - **Three server modes**: Production, Fresh World, and Vanilla Debug
 - **Backup preservation** - Production mode uses a working copy, leaving backup untouched
@@ -22,27 +22,23 @@ Local Minecraft 1.21.1 Fabric test server for validating [MCC modpack](https://g
 
 ## Quick Start
 
-### Option 1: All-in-One Launcher
+### Option 1: Interactive Menu (Recommended)
 
-```batch
-scripts\start-test-env.bat
+```bash
+python server-config.py
 ```
 
-This will:
-1. Start `packwiz serve` (if not running)
-2. Launch the test server
-3. Open Prism Launcher
+Press **1** to start the server. Mods will auto-sync from the mrpack if needed.
 
-### Option 2: Manual Start
+### Option 2: Direct Start
 
-```powershell
-# Terminal 1: Start packwiz serve
-cd ..\MCC
-.\packwiz.exe serve
+```batch
+python server-config.py start
+```
 
-# Terminal 2: Start server
-cd ..\LocalServer
-.\start.bat
+Or use the batch file:
+```batch
+start.bat
 ```
 
 ### Connect
@@ -91,9 +87,11 @@ LocalServer supports three modes, managed via `python server-config.py`:
 
 ```bash
 python server-config.py                    # Interactive menu
+python server-config.py start              # Start server (auto-syncs mods)
 python server-config.py mode production    # Switch to production mode
 python server-config.py mode fresh         # Switch to fresh world mode
 python server-config.py mode vanilla       # Switch to vanilla debug mode
+python server-config.py sync-mods          # Manually sync mods from mrpack
 python server-config.py reset-local        # Reset world-local from backup
 ```
 
@@ -160,7 +158,6 @@ To use a different Java installation, edit the `JAVA_PATH` variable in `start.ba
 |---------|------|----------|
 | Minecraft Server | 25565 | TCP |
 | RCON | 25575 | TCP |
-| Packwiz Serve | 8080 | HTTP |
 
 ### RCON Access
 
@@ -169,32 +166,32 @@ To use a different Java installation, edit the `JAVA_PATH` variable in `start.ba
 mcrcon -H localhost -P 25575 -p testpassword "say Hello"
 ```
 
-## Scripts
+## Mod Sync
 
-### start-test-env.bat
+LocalServer syncs mods by extracting them directly from the `.mrpack` file in MCC directory. This avoids CurseForge API restrictions that affect some mods (Axiom, First Person Model, etc.).
 
-Launches the complete test environment:
-- Checks if packwiz serve is running, starts it if not
-- Starts the Minecraft server
-- Optionally launches Prism Launcher
+**How it works:**
+1. On server start, checks if mods folder has <10 JARs
+2. If mods missing, finds latest `MCC-*.mrpack` in `../MCC/`
+3. If no mrpack exists, automatically runs `packwiz modrinth export`
+4. Extracts bundled mods from the mrpack
+5. Downloads any manifest-referenced mods from URLs
 
-### sync-to-test-server.ps1
-
-Exports an `.mrpack` from the MCC packwiz project. The server will auto-update from packwiz serve on next start.
+**Manual sync:** Press **'m'** in the menu or run `python server-config.py sync-mods`
 
 ## Development Workflow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  1. Edit modpack in ../MCC/                                 │
-│     - Add/remove mods: packwiz mr install <mod>             │
-│     - Edit configs in overrides/                            │
+│     - Add/remove mods: packwiz cf install <mod>             │
+│     - Edit configs in config/                               │
 ├─────────────────────────────────────────────────────────────┤
-│  2. Start packwiz serve                                     │
-│     cd ../MCC && packwiz serve                              │
+│  2. Export mrpack (or let server do it automatically)       │
+│     cd ../MCC && packwiz modrinth export                    │
 ├─────────────────────────────────────────────────────────────┤
-│  3. Start test server (auto-updates from packwiz)           │
-│     start.bat                                               │
+│  3. Start test server (auto-syncs mods from mrpack)         │
+│     python server-config.py start                           │
 ├─────────────────────────────────────────────────────────────┤
 │  4. Launch client & connect to localhost                    │
 │     - Test the changes                                      │
@@ -224,12 +221,13 @@ Exports an `.mrpack` from the MCC packwiz project. The server will auto-update f
 | "Outdated server/client" | Version mismatch - both must be 1.21.1 |
 | "Mod mismatch" | Re-sync using packwiz workflow |
 
-### Packwiz Issues
+### Mod Sync Issues
 
 | Error | Solution |
 |-------|----------|
-| "Connection refused" on update | Ensure `packwiz serve` is running |
-| Mods not updating | Run `packwiz refresh` in MCC directory |
+| "No mrpack found" | Run `packwiz modrinth export` in MCC directory |
+| "Failed to find or create mrpack" | Check that `../MCC/packwiz.exe` exists |
+| Mods not updating | Delete mods folder and run `sync-mods` |
 
 ## First-Time Setup
 
@@ -238,9 +236,6 @@ If setting up from scratch (JARs not present):
 ```powershell
 # Download Fabric server launcher
 Invoke-WebRequest -Uri "https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.16.9/1.0.1/server/jar" -OutFile "fabric-server-launch.jar"
-
-# Download packwiz-installer-bootstrap
-Invoke-WebRequest -Uri "https://github.com/packwiz/packwiz-installer-bootstrap/releases/latest/download/packwiz-installer-bootstrap.jar" -OutFile "packwiz-installer-bootstrap.jar"
 ```
 
 ## Related Projects

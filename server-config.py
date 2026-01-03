@@ -415,6 +415,256 @@ def show_status():
 
 
 # =============================================================================
+# Mod Sync Functions
+# =============================================================================
+
+def export_mrpack():
+    """Export mrpack using packwiz in MCC directory"""
+    packwiz_exe = os.path.join(MCC_DIR, "packwiz.exe")
+    if not os.path.exists(packwiz_exe):
+        console.print(f"[red]Error: packwiz.exe not found at {packwiz_exe}[/red]")
+        return False
+
+    console.print("[cyan]Exporting mrpack from MCC...[/cyan]")
+    try:
+        result = subprocess.run(
+            [packwiz_exe, "modrinth", "export"],
+            cwd=MCC_DIR,
+            capture_output=True,
+            text=True,
+            timeout=120  # 2 minutes for large packs
+        )
+        if result.returncode != 0:
+            console.print(f"[red]Export failed: {result.stderr[:500] if result.stderr else 'unknown error'}[/red]")
+            return False
+        console.print("[green]✓ mrpack exported[/green]")
+        return True
+    except subprocess.TimeoutExpired:
+        console.print("[red]Export timed out[/red]")
+        return False
+    except Exception as e:
+        console.print(f"[red]Export error: {e}[/red]")
+        return False
+
+
+def find_latest_mrpack(auto_export=True):
+    """Find the most recent .mrpack file in MCC directory.
+
+    If auto_export is True and no mrpack exists, will automatically
+    run packwiz modrinth export to create one.
+    """
+    import glob
+    mrpacks = glob.glob(os.path.join(MCC_DIR, "MCC-*.mrpack"))
+
+    if not mrpacks and auto_export:
+        console.print("[yellow]No mrpack found - exporting from packwiz...[/yellow]")
+        if export_mrpack():
+            mrpacks = glob.glob(os.path.join(MCC_DIR, "MCC-*.mrpack"))
+
+    if not mrpacks:
+        return None
+    # Sort by modification time, newest first
+    mrpacks.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+    return mrpacks[0]
+
+
+def sync_mods_from_mrpack():
+    """Sync mods by extracting from the latest .mrpack file.
+
+    This is more reliable than packwiz-installer because the .mrpack
+    already contains all JARs, avoiding CurseForge API restrictions.
+    """
+    import zipfile
+    import json
+
+    mrpack_path = find_latest_mrpack(auto_export=True)
+    if not mrpack_path:
+        console.print("[red]Failed to find or create mrpack![/red]")
+        console.print("[yellow]Check that MCC directory exists and packwiz.exe works.[/yellow]")
+        return False
+
+    mrpack_name = os.path.basename(mrpack_path)
+    console.print(f"[cyan]Syncing mods from {mrpack_name}...[/cyan]")
+
+    mods_dir = os.path.join(SCRIPT_DIR, "mods")
+    config_dir = os.path.join(SCRIPT_DIR, "config")
+
+    try:
+        with zipfile.ZipFile(mrpack_path, 'r') as zf:
+            # Read manifest to understand structure
+            manifest_data = zf.read('modrinth.index.json')
+            manifest = json.loads(manifest_data)
+
+            # Count items
+            mod_count = 0
+            config_count = 0
+
+            # Extract mods (from overrides/mods/)
+            for name in zf.namelist():
+                if name.startswith('overrides/mods/') and name.endswith('.jar'):
+                    # Extract just the filename
+                    filename = os.path.basename(name)
+                    if filename:  # Skip directory entries
+                        dest_path = os.path.join(mods_dir, filename)
+                        os.makedirs(mods_dir, exist_ok=True)
+                        with zf.open(name) as src, open(dest_path, 'wb') as dst:
+                            dst.write(src.read())
+                        mod_count += 1
+
+                # Extract configs (from overrides/config/)
+                elif name.startswith('overrides/config/'):
+                    rel_path = name[len('overrides/config/'):]
+                    if rel_path:  # Skip directory entries
+                        dest_path = os.path.join(config_dir, rel_path)
+                        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                        if not name.endswith('/'):  # Skip directories
+                            with zf.open(name) as src, open(dest_path, 'wb') as dst:
+                                dst.write(src.read())
+                            config_count += 1
+
+            # Also handle files listed in manifest (downloaded mods)
+            # These are referenced by URL in the manifest
+            files_in_manifest = len(manifest.get('files', []))
+
+            console.print(f"[green]✓ Extracted {mod_count} bundled mods, {config_count} configs[/green]")
+            if files_in_manifest > 0:
+                console.print(f"[dim]  Note: {files_in_manifest} mods referenced by URL (handled by mrpack4server on production)[/dim]")
+
+            return True
+
+    except zipfile.BadZipFile:
+        console.print(f"[red]Error: {mrpack_name} is not a valid zip file[/red]")
+        return False
+    except Exception as e:
+        console.print(f"[red]Error extracting mrpack: {e}[/red]")
+        return False
+
+
+def download_mod_from_url(url, dest_path):
+    """Download a mod JAR from URL"""
+    import urllib.request
+    import urllib.error
+
+    try:
+        # Handle CurseForge edge CDN URLs
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            with open(dest_path, 'wb') as f:
+                f.write(response.read())
+        return True
+    except urllib.error.HTTPError as e:
+        console.print(f"[red]HTTP Error {e.code}: {e.reason}[/red]")
+        return False
+    except Exception as e:
+        console.print(f"[red]Download failed: {e}[/red]")
+        return False
+
+
+def sync_mods_full():
+    """Full mod sync - extracts bundled mods and downloads referenced mods.
+
+    This handles the complete mrpack format where:
+    - Some mods are bundled in overrides/mods/
+    - Other mods are referenced by URL in the manifest
+    """
+    import zipfile
+    import json
+
+    mrpack_path = find_latest_mrpack(auto_export=True)
+    if not mrpack_path:
+        console.print("[red]Failed to find or create mrpack![/red]")
+        console.print("[yellow]Check that MCC directory exists and packwiz.exe works.[/yellow]")
+        return False
+
+    mrpack_name = os.path.basename(mrpack_path)
+    console.print(f"[cyan]Full sync from {mrpack_name}...[/cyan]")
+
+    mods_dir = os.path.join(SCRIPT_DIR, "mods")
+    config_dir = os.path.join(SCRIPT_DIR, "config")
+    os.makedirs(mods_dir, exist_ok=True)
+
+    bundled_count = 0
+    downloaded_count = 0
+    skipped_count = 0
+    failed_count = 0
+    config_count = 0
+
+    try:
+        with zipfile.ZipFile(mrpack_path, 'r') as zf:
+            # Read manifest
+            manifest_data = zf.read('modrinth.index.json')
+            manifest = json.loads(manifest_data)
+
+            # 1. Extract bundled files from overrides/
+            for name in zf.namelist():
+                if name.startswith('overrides/mods/') and name.endswith('.jar'):
+                    filename = os.path.basename(name)
+                    if filename:
+                        dest_path = os.path.join(mods_dir, filename)
+                        with zf.open(name) as src, open(dest_path, 'wb') as dst:
+                            dst.write(src.read())
+                        bundled_count += 1
+
+                elif name.startswith('overrides/config/'):
+                    rel_path = name[len('overrides/config/'):]
+                    if rel_path and not name.endswith('/'):
+                        dest_path = os.path.join(config_dir, rel_path)
+                        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                        with zf.open(name) as src, open(dest_path, 'wb') as dst:
+                            dst.write(src.read())
+                        config_count += 1
+
+            # 2. Download mods referenced in manifest
+            manifest_files = manifest.get('files', [])
+            mod_files = [f for f in manifest_files if f.get('path', '').startswith('mods/')]
+
+            if mod_files:
+                console.print(f"[cyan]Downloading {len(mod_files)} mods from URLs...[/cyan]")
+
+                for mod_info in mod_files:
+                    path = mod_info.get('path', '')
+                    filename = os.path.basename(path)
+                    dest_path = os.path.join(SCRIPT_DIR, path)
+
+                    # Check if already exists with correct hash
+                    if os.path.exists(dest_path):
+                        skipped_count += 1
+                        continue
+
+                    # Get download URL
+                    downloads = mod_info.get('downloads', [])
+                    if not downloads:
+                        console.print(f"[yellow]  No download URL for {filename}[/yellow]")
+                        failed_count += 1
+                        continue
+
+                    url = downloads[0]
+                    console.print(f"[dim]  Downloading {filename}...[/dim]")
+
+                    if download_mod_from_url(url, dest_path):
+                        downloaded_count += 1
+                    else:
+                        console.print(f"[red]  Failed: {filename}[/red]")
+                        failed_count += 1
+
+            # Summary
+            console.print(f"\n[green]✓ Sync complete:[/green]")
+            console.print(f"  • Bundled mods extracted: {bundled_count}")
+            console.print(f"  • Mods downloaded: {downloaded_count}")
+            if skipped_count > 0:
+                console.print(f"  • Already up to date: {skipped_count}")
+            if failed_count > 0:
+                console.print(f"  [red]• Failed: {failed_count}[/red]")
+            console.print(f"  • Config files: {config_count}")
+
+            return failed_count == 0
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        return False
+
+
+# =============================================================================
 # Server Control Functions
 # =============================================================================
 
@@ -444,44 +694,25 @@ def start_server():
         console.print("[yellow]Starting server in VANILLA mode (no packwiz sync)...[/yellow]")
     else:
         console.print(f"[cyan]Starting server in {current_mode.upper()} mode...[/cyan]")
+        # Set up auto-op for local testing
+        setup_auto_op()
 
-    # Sync from packwiz if not vanilla mode
+    # Sync mods from mrpack if not vanilla mode
     if not is_vanilla:
-        packwiz_bootstrap = os.path.join(SCRIPT_DIR, "packwiz-installer-bootstrap.jar")
-        if os.path.exists(packwiz_bootstrap):
-            console.print("[cyan]Syncing mods from packwiz serve...[/cyan]")
-            try:
-                result = subprocess.run(
-                    [JAVA_PATH, "-jar", packwiz_bootstrap, "-g", "-s", "server", "http://localhost:8080/pack.toml"],
-                    cwd=SCRIPT_DIR,
-                    timeout=30,
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode != 0:
-                    console.print("[red]⚠ Packwiz sync failed![/red]")
-                    if result.stderr:
-                        console.print(f"[dim]{result.stderr[:500]}[/dim]")
-                    console.print("[yellow]Is 'packwiz serve' running in the MCC directory?[/yellow]")
-                    console.print("[yellow]Run: cd ../MCC && ./packwiz.exe serve[/yellow]")
-                    from rich.prompt import Confirm
-                    if not Confirm.ask("[yellow]Start server anyway (mods may be missing)?[/yellow]", default=False):
-                        return False
-                else:
-                    console.print("[green]✓ Mods synced[/green]")
-            except subprocess.TimeoutExpired:
-                console.print("[red]⚠ Packwiz sync timed out![/red]")
-                console.print("[yellow]Is 'packwiz serve' running? Run: cd ../MCC && ./packwiz.exe serve[/yellow]")
-                from rich.prompt import Confirm
-                if not Confirm.ask("[yellow]Start server anyway (mods may be missing)?[/yellow]", default=False):
-                    return False
-            except Exception as e:
-                console.print(f"[red]⚠ Packwiz sync error: {e}[/red]")
+        # Check if mods are missing
+        mods_dir = os.path.join(SCRIPT_DIR, "mods")
+        existing_jars = []
+        if os.path.exists(mods_dir):
+            existing_jars = [f for f in os.listdir(mods_dir) if f.endswith('.jar')]
+
+        if len(existing_jars) < 10:  # Likely missing most mods
+            console.print(f"[yellow]Only {len(existing_jars)} mod JARs found - syncing from mrpack...[/yellow]")
+            if not sync_mods_full():
                 from rich.prompt import Confirm
                 if not Confirm.ask("[yellow]Start server anyway (mods may be missing)?[/yellow]", default=False):
                     return False
         else:
-            console.print("[yellow]⚠ packwiz-installer-bootstrap.jar not found - skipping mod sync[/yellow]")
+            console.print(f"[green]✓ {len(existing_jars)} mods already present[/green]")
 
     # Build command
     cmd = [JAVA_PATH] + JVM_FLAGS + ["-jar", SERVER_JAR, "nogui"]
@@ -547,6 +778,48 @@ def send_rcon_command(cmd):
 # =============================================================================
 # Mode Switching Functions
 # =============================================================================
+
+def setup_auto_op():
+    """Configure LuckPerms to auto-op all players on LocalServer.
+
+    This is for local testing only - makes everyone op automatically.
+    """
+    lp_config = os.path.join(SCRIPT_DIR, "config", "luckperms", "luckperms.conf")
+    lp_groups = os.path.join(SCRIPT_DIR, "config", "luckperms", "yaml-storage", "groups")
+
+    if not os.path.exists(lp_config):
+        return  # LuckPerms not configured yet, will be set up on first run
+
+    # Check if already configured
+    with open(lp_config, 'r') as f:
+        content = f.read()
+
+    changes_made = False
+
+    # Switch to YAML storage if needed
+    if 'storage-method = "h2"' in content:
+        content = content.replace('storage-method = "h2"', 'storage-method = "yaml"')
+        changes_made = True
+
+    # Enable auto-op if needed
+    if 'auto-op = false' in content:
+        content = content.replace('auto-op = false', 'auto-op = true')
+        changes_made = True
+
+    if changes_made:
+        with open(lp_config, 'w') as f:
+            f.write(content)
+        console.print("[green]✓ LuckPerms configured for auto-op[/green]")
+
+    # Create default group with autoop permission
+    os.makedirs(lp_groups, exist_ok=True)
+    default_group = os.path.join(lp_groups, "default.yml")
+
+    if not os.path.exists(default_group):
+        with open(default_group, 'w') as f:
+            f.write('name: default\npermissions:\n  - "luckperms.autoop"\n  - "*"\n')
+        console.print("[green]✓ Created default group with op permissions[/green]")
+
 
 def switch_to_production_mode():
     """Switch local server to production mode"""
@@ -1190,6 +1463,7 @@ def interactive_menu():
         table.add_row("7", "[red]Delete Production Backup[/red]")
         table.add_row("", "")
         table.add_row("", "[dim]── Utilities ──[/dim]")
+        table.add_row("m", "Sync Mods (from mrpack)")
         table.add_row("r", "Send RCON Command")
         table.add_row("s", "Show Status")
         table.add_row("", "")
@@ -1198,7 +1472,7 @@ def interactive_menu():
         console.print(table)
         console.print()
 
-        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "p", "f", "v", "r", "s", "q"], default="q")
+        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "p", "f", "v", "m", "r", "s", "q"], default="q")
 
         if choice == "1":
             start_server()
@@ -1240,6 +1514,10 @@ def interactive_menu():
 
         elif choice == "7":
             reset_world("production")
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "m":
+            sync_mods_full()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "r":
@@ -1296,6 +1574,8 @@ if __name__ == "__main__":
             reset_local_world()
         elif command == "clear-mods":
             clear_mods()
+        elif command == "sync-mods":
+            sync_mods_full()
         elif command == "rcon":
             if len(sys.argv) < 3:
                 console.print("[yellow]Usage: python server-config.py rcon <command>[/yellow]")
@@ -1326,6 +1606,7 @@ if __name__ == "__main__":
             console.print("[dim]  world-upload    - Upload world-production → production server[/dim]")
             console.print("")
             console.print("[yellow]Utilities:[/yellow]")
+            console.print("  python server-config.py sync-mods    # Sync mods from mrpack")
             console.print("  python server-config.py clear-mods   # Remove non-API mods")
             console.print("  python server-config.py rcon <cmd>   # Send RCON command")
     else:
