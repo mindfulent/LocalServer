@@ -652,6 +652,14 @@ def switch_to_fresh_mode():
 
 def switch_to_vanilla_mode():
     """Switch local server to vanilla debug mode"""
+
+    # Check if server is running
+    if is_server_running():
+        console.print("[red]Error: Server is currently running![/red]")
+        console.print("[yellow]Stop the server first before switching to Vanilla mode.[/yellow]")
+        console.print("[dim]Vanilla mode needs to delete mod files, which can't be done while the server has them open.[/dim]")
+        return False
+
     console.print(Panel(
         "[bold]Vanilla Debug Mode Setup[/bold]\n\n"
         "Fabric-only testing (no modpack mods):\n"
@@ -683,15 +691,28 @@ def switch_to_vanilla_mode():
         fabric_api = [f for f in all_jars if 'fabric-api' in f.lower()]
         to_remove = [f for f in all_jars if f not in fabric_api]
 
+        removed = 0
+        failed = 0
         for f in to_remove:
-            os.remove(os.path.join(mods_dir, f))
+            try:
+                os.remove(os.path.join(mods_dir, f))
+                removed += 1
+            except PermissionError:
+                failed += 1
+                if failed == 1:  # Only show message once
+                    console.print(f"[red]Error: Cannot delete mods - files are locked![/red]")
+                    console.print("[yellow]Make sure no Minecraft client or other process has the mods folder open.[/yellow]")
+                    return False
 
         # Also remove .pw.toml files
         pw_files = [f for f in os.listdir(mods_dir) if f.endswith('.pw.toml')]
         for f in pw_files:
-            os.remove(os.path.join(mods_dir, f))
+            try:
+                os.remove(os.path.join(mods_dir, f))
+            except PermissionError:
+                pass  # Not critical
 
-        console.print(f"[green]✓ Removed {len(to_remove)} mods, kept {len(fabric_api)} Fabric API[/green]")
+        console.print(f"[green]✓ Removed {removed} mods, kept {len(fabric_api)} Fabric API[/green]")
     else:
         console.print("[yellow]No mods folder found[/yellow]")
 
