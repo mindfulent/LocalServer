@@ -692,17 +692,22 @@ def switch_to_vanilla_mode():
         to_remove = [f for f in all_jars if f not in fabric_api]
 
         removed = 0
-        failed = 0
         for f in to_remove:
             try:
                 os.remove(os.path.join(mods_dir, f))
                 removed += 1
             except PermissionError:
-                failed += 1
-                if failed == 1:  # Only show message once
-                    console.print(f"[red]Error: Cannot delete mods - files are locked![/red]")
-                    console.print("[yellow]Make sure no Minecraft client or other process has the mods folder open.[/yellow]")
-                    return False
+                console.print(f"\n[red]Error: Cannot delete '{f}' - file is locked![/red]")
+                console.print("\n[yellow]Something is holding this file open. Common causes:[/yellow]")
+                console.print("  • Minecraft client (Prism Launcher instance running)")
+                console.print("  • File explorer with mods folder open")
+                console.print("  • Antivirus scanning the folder")
+                console.print("  • IDE or editor with the folder indexed")
+                console.print("\n[cyan]To find the culprit on Windows:[/cyan]")
+                console.print("  1. Open Resource Monitor (resmon.exe)")
+                console.print("  2. Go to CPU tab → Associated Handles")
+                console.print("  3. Search for: LocalServer")
+                return False
 
         # Also remove .pw.toml files
         pw_files = [f for f in os.listdir(mods_dir) if f.endswith('.pw.toml')]
