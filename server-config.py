@@ -86,6 +86,47 @@ if sys.platform == 'win32':
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     os.environ['PYTHONIOENCODING'] = 'utf-8'
 
+# DistantHorizons file patterns (large LOD data, stored separately)
+DH_FILE_PATTERNS = [
+    "DistantHorizons.sqlite",
+    "DistantHorizons.sqlite-shm",
+    "DistantHorizons.sqlite-wal",
+]
+
+# Cold storage directory for DistantHorizons data
+DH_COLD_STORAGE = "distant-horizons-cold"
+
+
+def format_duration(seconds):
+    """Format elapsed time in human-readable format."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m {secs:.0f}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"
+
+
+def format_size(size_bytes):
+    """Format byte size in human-readable format."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def is_dh_file(filename):
+    """Check if a filename is a DistantHorizons data file."""
+    return any(filename.endswith(pattern) for pattern in DH_FILE_PATTERNS)
+
 
 # =============================================================================
 # Environment Loading
@@ -755,6 +796,17 @@ def sync_mods_full():
         import time
         console.print("[dim]Waiting for server to stop...[/dim]")
         time.sleep(3)
+
+    # Always regenerate mrpack to ensure latest mods are included
+    # Delete old mrpacks first to force fresh export
+    import glob
+    console.print("[cyan]Regenerating mrpack from MCC...[/cyan]")
+    old_mrpacks = glob.glob(os.path.join(MCC_DIR, "MCC-*.mrpack"))
+    for mrpack in old_mrpacks:
+        try:
+            os.remove(mrpack)
+        except OSError:
+            pass
 
     mrpack_path = find_latest_mrpack(auto_export=True)
     if not mrpack_path:
@@ -1598,21 +1650,36 @@ def return_to_main():
 # World Management Functions
 # =============================================================================
 
-def get_remote_directory_info(sftp, path):
-    """Calculate total size and file count of a remote directory recursively."""
+def get_remote_directory_info(sftp, path, exclude_dh=False):
+    """Calculate total size and file count of a remote directory recursively.
+
+    Args:
+        sftp: SFTP connection
+        path: Remote path to scan
+        exclude_dh: If True, exclude DistantHorizons files from count/size
+    """
     total_size = 0
     file_count = 0
+    dh_size = 0
+    dh_count = 0
 
     def scan_recursive(remote_path):
-        nonlocal total_size, file_count
+        nonlocal total_size, file_count, dh_size, dh_count
         try:
             for item in sftp.listdir_attr(remote_path):
                 item_path = f"{remote_path}/{item.filename}"
                 if item.st_mode & 0o40000:
                     scan_recursive(item_path)
                 else:
-                    total_size += item.st_size
-                    file_count += 1
+                    if is_dh_file(item.filename):
+                        dh_size += item.st_size
+                        dh_count += 1
+                        if not exclude_dh:
+                            total_size += item.st_size
+                            file_count += 1
+                    else:
+                        total_size += item.st_size
+                        file_count += 1
         except IOError:
             pass
 
@@ -1622,11 +1689,20 @@ def get_remote_directory_info(sftp, path):
     except IOError:
         pass
 
-    return file_count, total_size
+    return file_count, total_size, dh_count, dh_size
 
 
-def download_directory_recursive(sftp, remote_path, local_path, tracker, base_path=None):
-    """Download a remote directory recursively to local path with progress tracking."""
+def download_directory_recursive(sftp, remote_path, local_path, tracker, base_path=None, exclude_dh=False):
+    """Download a remote directory recursively to local path with progress tracking.
+
+    Args:
+        sftp: SFTP connection
+        remote_path: Remote directory to download
+        local_path: Local directory to save to
+        tracker: Progress tracker instance
+        base_path: Base path for relative path calculation
+        exclude_dh: If True, skip DistantHorizons files
+    """
     if base_path is None:
         base_path = local_path
 
@@ -1638,8 +1714,12 @@ def download_directory_recursive(sftp, remote_path, local_path, tracker, base_pa
             local_item = os.path.join(local_path, item.filename)
 
             if item.st_mode & 0o40000:
-                download_directory_recursive(sftp, remote_item, local_item, tracker, base_path)
+                download_directory_recursive(sftp, remote_item, local_item, tracker, base_path, exclude_dh)
             else:
+                # Skip DH files if requested
+                if exclude_dh and is_dh_file(item.filename):
+                    continue
+
                 try:
                     rel_path = os.path.relpath(local_item, base_path)
                     tracker.start_file(rel_path, item.st_size)
@@ -1672,8 +1752,15 @@ def backup_local_world(world_dirs):
     return backup_base
 
 
-def download_world(backup_existing=True, auto_confirm=False):
-    """Download world data from production server."""
+def download_world(backup_existing=True, auto_confirm=False, include_dh=False):
+    """Download world data from production server.
+
+    Args:
+        backup_existing: Backup existing local world before download
+        auto_confirm: Skip confirmation prompts
+        include_dh: If True, include DistantHorizons files (default: exclude)
+    """
+    import time
     from rich.prompt import Confirm
 
     WORLD_FOLDERS = [
@@ -1682,10 +1769,11 @@ def download_world(backup_existing=True, auto_confirm=False):
         ("/world_the_end", "world-production_the_end"),
     ]
 
+    dh_note = "" if include_dh else "\n[dim]DistantHorizons files will be excluded (use 'D' for full download)[/dim]"
     console.print(Panel(
         "[bold]Download Production World[/bold]\n\n"
         "This will download world data from the production server\n"
-        "to your local test environment.",
+        f"to your local test environment.{dh_note}",
         title="[cyan]World Sync[/cyan]",
         border_style="cyan"
     ))
@@ -1705,18 +1793,28 @@ def download_world(backup_existing=True, auto_confirm=False):
     folder_info = []
     total_files = 0
     total_size = 0
+    total_dh_files = 0
+    total_dh_size = 0
 
     for remote_path, local_name in WORLD_FOLDERS:
-        file_count, size = get_remote_directory_info(sftp, remote_path)
-        if file_count > 0:
+        file_count, size, dh_count, dh_size = get_remote_directory_info(
+            sftp, remote_path, exclude_dh=not include_dh
+        )
+        if file_count > 0 or (include_dh and dh_count > 0):
+            actual_files = file_count if include_dh else file_count
+            actual_size = size if include_dh else size
             folder_info.append({
                 'remote': remote_path,
                 'local': local_name,
-                'files': file_count,
-                'size': size
+                'files': actual_files,
+                'size': actual_size,
+                'dh_files': dh_count,
+                'dh_size': dh_size
             })
-            total_files += file_count
-            total_size += size
+            total_files += actual_files
+            total_size += actual_size
+            total_dh_files += dh_count
+            total_dh_size += dh_size
         else:
             console.print(f"[dim]  {remote_path} (not found, skipping)[/dim]")
 
@@ -1726,22 +1824,42 @@ def download_world(backup_existing=True, auto_confirm=False):
         ssh.close()
         return False
 
-    size_str = f"{total_size/(1024*1024*1024):.2f} GB" if total_size > 1024*1024*1024 else f"{total_size/(1024*1024):.1f} MB"
-
+    # Build table
     table = Table(title="Remote World Folders", box=box.ROUNDED)
     table.add_column("Folder", style="cyan")
     table.add_column("Files", style="white", justify="right")
     table.add_column("Size", style="green", justify="right")
+    if not include_dh and total_dh_files > 0:
+        table.add_column("DH (excluded)", style="dim", justify="right")
 
     for info in folder_info:
-        folder_size = f"{info['size']/(1024*1024*1024):.2f} GB" if info['size'] > 1024*1024*1024 else f"{info['size']/(1024*1024):.1f} MB"
-        table.add_row(info['remote'], str(info['files']), folder_size)
+        row = [info['remote'], str(info['files']), format_size(info['size'])]
+        if not include_dh and total_dh_files > 0:
+            if info['dh_files'] > 0:
+                row.append(f"{info['dh_files']} ({format_size(info['dh_size'])})")
+            else:
+                row.append("-")
+        table.add_row(*row)
 
-    table.add_row("", "", "", style="dim")
-    table.add_row("[bold]Total[/bold]", f"[bold]{total_files}[/bold]", f"[bold]{size_str}[/bold]")
+    # Totals row
+    if not include_dh and total_dh_files > 0:
+        table.add_row("", "", "", "", style="dim")
+        table.add_row(
+            "[bold]Total[/bold]",
+            f"[bold]{total_files}[/bold]",
+            f"[bold]{format_size(total_size)}[/bold]",
+            f"[dim]{total_dh_files} ({format_size(total_dh_size)})[/dim]"
+        )
+    else:
+        table.add_row("", "", "", style="dim")
+        table.add_row("[bold]Total[/bold]", f"[bold]{total_files}[/bold]", f"[bold]{format_size(total_size)}[/bold]")
 
     console.print()
     console.print(table)
+
+    if not include_dh and total_dh_size > 0:
+        console.print(f"\n[yellow]ℹ {format_size(total_dh_size)} of DistantHorizons data excluded[/yellow]")
+        console.print("[dim]  Use 'Download DistantHorizons' for cold storage backup[/dim]")
 
     # Check for local server running
     session_lock = os.path.join(SCRIPT_DIR, "world-production", "session.lock")
@@ -1755,7 +1873,7 @@ def download_world(backup_existing=True, auto_confirm=False):
 
     if not auto_confirm:
         console.print()
-        if not Confirm.ask(f"Download {size_str} from production server?"):
+        if not Confirm.ask(f"Download {format_size(total_size)} from production server?"):
             console.print("[yellow]Cancelled.[/yellow]")
             sftp.close()
             ssh.close()
@@ -1773,6 +1891,7 @@ def download_world(backup_existing=True, auto_confirm=False):
 
     # Download each folder
     console.print("\n[bold]Downloading world data...[/bold]\n")
+    start_time = time.time()
 
     with RichProgressTracker(total_files=total_files, total_size=total_size) as tracker:
         for info in folder_info:
@@ -1782,14 +1901,502 @@ def download_world(backup_existing=True, auto_confirm=False):
                 shutil.rmtree(local_path)
 
             console.print(f"[cyan]Downloading {info['remote']}...[/cyan]")
-            download_directory_recursive(sftp, info['remote'], local_path, tracker)
+            download_directory_recursive(
+                sftp, info['remote'], local_path, tracker,
+                exclude_dh=not include_dh
+            )
 
+    elapsed = time.time() - start_time
     sftp.close()
     ssh.close()
 
     console.print("\n" + "="*50)
     console.print("[bold green]✓ World download complete![/bold green]")
-    console.print(f"\n[cyan]Downloaded {total_files} files ({size_str})[/cyan]")
+    console.print(f"\n[cyan]Downloaded {total_files} files ({format_size(total_size)})[/cyan]")
+    console.print(f"[cyan]Elapsed time: {format_duration(elapsed)}[/cyan]")
+    console.print("="*50)
+
+    return True
+
+
+def download_distant_horizons(auto_confirm=False):
+    """Download DistantHorizons files to cold storage.
+
+    This downloads only the DH SQLite files to a separate cold storage
+    directory. These files are large and rarely need updating.
+    """
+    import time
+    from rich.prompt import Confirm
+
+    # DH file locations within world folders
+    DH_LOCATIONS = [
+        ("/world/data", "overworld"),
+        ("/world/DIM-1/data", "nether"),
+        ("/world/DIM1/data", "end"),
+    ]
+
+    console.print(Panel(
+        "[bold]Download DistantHorizons Data[/bold]\n\n"
+        "This downloads DistantHorizons LOD data to cold storage.\n"
+        "These files are large and rarely change.\n\n"
+        f"[dim]Cold storage location: {DH_COLD_STORAGE}/[/dim]",
+        title="[cyan]Cold Storage Backup[/cyan]",
+        border_style="cyan"
+    ))
+
+    if not check_sftp_credentials():
+        return False
+
+    console.print(f"\n[cyan]Connecting to {SFTP_HOST}:{SFTP_PORT}...[/cyan]")
+
+    ssh, sftp = get_sftp_connection()
+    if not sftp:
+        return False
+
+    console.print("[green]Connected![/green]")
+    console.print("\n[cyan]Scanning for DistantHorizons files...[/cyan]")
+
+    # Find DH files
+    dh_files = []
+    total_size = 0
+
+    for remote_dir, dim_name in DH_LOCATIONS:
+        try:
+            for item in sftp.listdir_attr(remote_dir):
+                if is_dh_file(item.filename):
+                    dh_files.append({
+                        'remote': f"{remote_dir}/{item.filename}",
+                        'local_dir': dim_name,
+                        'filename': item.filename,
+                        'size': item.st_size
+                    })
+                    total_size += item.st_size
+        except IOError:
+            console.print(f"[dim]  {remote_dir} (not found)[/dim]")
+
+    if not dh_files:
+        console.print("[yellow]No DistantHorizons files found on server[/yellow]")
+        sftp.close()
+        ssh.close()
+        return False
+
+    # Display found files
+    table = Table(title="DistantHorizons Files", box=box.ROUNDED)
+    table.add_column("Dimension", style="cyan")
+    table.add_column("File", style="white")
+    table.add_column("Size", style="green", justify="right")
+
+    for df in dh_files:
+        table.add_row(df['local_dir'], df['filename'], format_size(df['size']))
+
+    table.add_row("", "", "", style="dim")
+    table.add_row("[bold]Total[/bold]", f"[bold]{len(dh_files)} files[/bold]", f"[bold]{format_size(total_size)}[/bold]")
+
+    console.print()
+    console.print(table)
+
+    if not auto_confirm:
+        console.print()
+        if not Confirm.ask(f"Download {format_size(total_size)} to cold storage?"):
+            console.print("[yellow]Cancelled.[/yellow]")
+            sftp.close()
+            ssh.close()
+            return False
+
+    # Create cold storage directory
+    cold_storage_path = os.path.join(SCRIPT_DIR, DH_COLD_STORAGE)
+    os.makedirs(cold_storage_path, exist_ok=True)
+
+    console.print("\n[bold]Downloading DistantHorizons files...[/bold]\n")
+    start_time = time.time()
+
+    with RichProgressTracker(total_files=len(dh_files), total_size=total_size) as tracker:
+        for df in dh_files:
+            dim_dir = os.path.join(cold_storage_path, df['local_dir'])
+            os.makedirs(dim_dir, exist_ok=True)
+
+            local_path = os.path.join(dim_dir, df['filename'])
+            tracker.start_file(f"{df['local_dir']}/{df['filename']}", df['size'])
+
+            try:
+                sftp.get(df['remote'], local_path, callback=progress_callback(tracker))
+                tracker.file_complete(success=True)
+            except Exception as e:
+                tracker.file_complete(success=False)
+                console.print(f"[red]Error downloading {df['filename']}: {e}[/red]")
+
+    elapsed = time.time() - start_time
+    sftp.close()
+    ssh.close()
+
+    console.print("\n" + "="*50)
+    console.print("[bold green]✓ DistantHorizons download complete![/bold green]")
+    console.print(f"\n[cyan]Downloaded {len(dh_files)} files ({format_size(total_size)})[/cyan]")
+    console.print(f"[cyan]Elapsed time: {format_duration(elapsed)}[/cyan]")
+    console.print(f"[dim]Saved to: {DH_COLD_STORAGE}/[/dim]")
+    console.print("="*50)
+
+    return True
+
+
+def upload_directory_recursive(sftp, local_path, remote_path, tracker, base_path=None, exclude_dh=False):
+    """Upload a local directory recursively to remote path with progress tracking.
+
+    Args:
+        sftp: SFTP connection
+        local_path: Local directory to upload
+        remote_path: Remote directory to save to
+        tracker: Progress tracker instance
+        base_path: Base path for relative path calculation
+        exclude_dh: If True, skip DistantHorizons files
+    """
+    if base_path is None:
+        base_path = local_path
+
+    # Create remote directory
+    try:
+        sftp.stat(remote_path)
+    except IOError:
+        sftp.mkdir(remote_path)
+
+    for item in os.listdir(local_path):
+        local_item = os.path.join(local_path, item)
+        remote_item = f"{remote_path}/{item}"
+
+        if os.path.isdir(local_item):
+            upload_directory_recursive(sftp, local_item, remote_item, tracker, base_path, exclude_dh)
+        else:
+            # Skip DH files if requested
+            if exclude_dh and is_dh_file(item):
+                continue
+
+            try:
+                file_size = os.path.getsize(local_item)
+                rel_path = os.path.relpath(local_item, base_path)
+                tracker.start_file(rel_path, file_size)
+                sftp.put(local_item, remote_item, callback=progress_callback(tracker))
+                tracker.file_complete(success=True)
+            except Exception as e:
+                tracker.file_complete(success=False)
+                console.print(f"[red]Error uploading {item}: {e}[/red]")
+
+
+def get_local_directory_info(path, exclude_dh=False):
+    """Calculate total size and file count of a local directory recursively."""
+    total_size = 0
+    file_count = 0
+    dh_size = 0
+    dh_count = 0
+
+    for dirpath, dirnames, filenames in os.walk(path):
+        for filename in filenames:
+            filepath = os.path.join(dirpath, filename)
+            try:
+                file_size = os.path.getsize(filepath)
+                if is_dh_file(filename):
+                    dh_size += file_size
+                    dh_count += 1
+                    if not exclude_dh:
+                        total_size += file_size
+                        file_count += 1
+                else:
+                    total_size += file_size
+                    file_count += 1
+            except OSError:
+                pass
+
+    return file_count, total_size, dh_count, dh_size
+
+
+def upload_world(auto_confirm=False):
+    """Upload world data to production server (excludes DistantHorizons).
+
+    This uploads world-production folders back to the production server.
+    Requires server to be offline.
+    """
+    import time
+    from rich.prompt import Confirm
+
+    WORLD_FOLDERS = [
+        ("world-production", "/world"),
+        ("world-production_nether", "/world_nether"),
+        ("world-production_the_end", "/world_the_end"),
+    ]
+
+    console.print(Panel(
+        "[bold red]Upload World to Production[/bold red]\n\n"
+        "This will upload local world data to the production server.\n"
+        "[yellow]⚠ The production server MUST be offline![/yellow]\n\n"
+        "[dim]DistantHorizons files are excluded (upload separately)[/dim]",
+        title="[red]⚠ Production Upload[/red]",
+        border_style="red"
+    ))
+
+    if not check_sftp_credentials():
+        return False
+
+    # Check which local folders exist
+    folder_info = []
+    total_files = 0
+    total_size = 0
+    total_dh_files = 0
+    total_dh_size = 0
+
+    for local_name, remote_path in WORLD_FOLDERS:
+        local_path = os.path.join(SCRIPT_DIR, local_name)
+        if os.path.exists(local_path):
+            file_count, size, dh_count, dh_size = get_local_directory_info(local_path, exclude_dh=True)
+            folder_info.append({
+                'local': local_name,
+                'remote': remote_path,
+                'files': file_count,
+                'size': size,
+                'dh_files': dh_count,
+                'dh_size': dh_size
+            })
+            total_files += file_count
+            total_size += size
+            total_dh_files += dh_count
+            total_dh_size += dh_size
+        else:
+            console.print(f"[dim]  {local_name}/ not found, skipping[/dim]")
+
+    if not folder_info:
+        console.print("[red]No world folders found locally![/red]")
+        return False
+
+    # Build table
+    table = Table(title="Local World Folders", box=box.ROUNDED)
+    table.add_column("Folder", style="cyan")
+    table.add_column("Files", style="white", justify="right")
+    table.add_column("Size", style="green", justify="right")
+    if total_dh_files > 0:
+        table.add_column("DH (excluded)", style="dim", justify="right")
+
+    for info in folder_info:
+        row = [info['local'], str(info['files']), format_size(info['size'])]
+        if total_dh_files > 0:
+            if info['dh_files'] > 0:
+                row.append(f"{info['dh_files']} ({format_size(info['dh_size'])})")
+            else:
+                row.append("-")
+        table.add_row(*row)
+
+    # Totals row
+    if total_dh_files > 0:
+        table.add_row("", "", "", "", style="dim")
+        table.add_row(
+            "[bold]Total[/bold]",
+            f"[bold]{total_files}[/bold]",
+            f"[bold]{format_size(total_size)}[/bold]",
+            f"[dim]{total_dh_files} ({format_size(total_dh_size)})[/dim]"
+        )
+    else:
+        table.add_row("", "", "", style="dim")
+        table.add_row("[bold]Total[/bold]", f"[bold]{total_files}[/bold]", f"[bold]{format_size(total_size)}[/bold]")
+
+    console.print()
+    console.print(table)
+
+    if total_dh_size > 0:
+        console.print(f"\n[yellow]ℹ {format_size(total_dh_size)} of DistantHorizons data will be excluded[/yellow]")
+        console.print("[dim]  Use 'Upload DistantHorizons' to upload DH separately (server can be online)[/dim]")
+
+    # Confirm server is offline
+    console.print("\n[bold red]⚠ IMPORTANT: Ensure the production server is OFFLINE![/bold red]")
+    if not auto_confirm:
+        if not Confirm.ask("[red]Is the production server offline?[/red]"):
+            console.print("[yellow]Cancelled. Stop the server first.[/yellow]")
+            return False
+
+    if not auto_confirm:
+        console.print()
+        if not Confirm.ask(f"[red]Upload {format_size(total_size)} to production server?[/red]"):
+            console.print("[yellow]Cancelled.[/yellow]")
+            return False
+
+    console.print(f"\n[cyan]Connecting to {SFTP_HOST}:{SFTP_PORT}...[/cyan]")
+
+    ssh, sftp = get_sftp_connection()
+    if not sftp:
+        return False
+
+    console.print("[green]Connected![/green]")
+
+    # Upload each folder
+    console.print("\n[bold]Uploading world data...[/bold]\n")
+    start_time = time.time()
+
+    with RichProgressTracker(total_files=total_files, total_size=total_size) as tracker:
+        for info in folder_info:
+            local_path = os.path.join(SCRIPT_DIR, info['local'])
+
+            console.print(f"[cyan]Uploading {info['local']} → {info['remote']}...[/cyan]")
+
+            # Clear remote directory first
+            try:
+                # Remove existing files in remote (but not the directory itself)
+                def clear_remote_dir(remote_dir):
+                    try:
+                        for item in sftp.listdir_attr(remote_dir):
+                            item_path = f"{remote_dir}/{item.filename}"
+                            if item.st_mode & 0o40000:
+                                clear_remote_dir(item_path)
+                                sftp.rmdir(item_path)
+                            else:
+                                sftp.remove(item_path)
+                    except IOError:
+                        pass
+
+                clear_remote_dir(info['remote'])
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not clear {info['remote']}: {e}[/yellow]")
+
+            upload_directory_recursive(
+                sftp, local_path, info['remote'], tracker,
+                exclude_dh=True
+            )
+
+    elapsed = time.time() - start_time
+    sftp.close()
+    ssh.close()
+
+    console.print("\n" + "="*50)
+    console.print("[bold green]✓ World upload complete![/bold green]")
+    console.print(f"\n[cyan]Uploaded {total_files} files ({format_size(total_size)})[/cyan]")
+    console.print(f"[cyan]Elapsed time: {format_duration(elapsed)}[/cyan]")
+    console.print("\n[yellow]Remember: Start the production server when ready[/yellow]")
+    console.print("="*50)
+
+    return True
+
+
+def upload_distant_horizons(auto_confirm=False):
+    """Upload DistantHorizons files from cold storage to production.
+
+    This can be done while the server is online - DH files are not
+    a hard dependency for server startup.
+    """
+    import time
+    from rich.prompt import Confirm
+
+    # DH file destinations within world folders
+    DH_DESTINATIONS = [
+        ("overworld", "/world/data"),
+        ("nether", "/world/DIM-1/data"),
+        ("end", "/world/DIM1/data"),
+    ]
+
+    cold_storage_path = os.path.join(SCRIPT_DIR, DH_COLD_STORAGE)
+
+    if not os.path.exists(cold_storage_path):
+        console.print(f"[red]Cold storage not found: {DH_COLD_STORAGE}/[/red]")
+        console.print("[dim]Use 'Download DistantHorizons' to create cold storage first[/dim]")
+        return False
+
+    console.print(Panel(
+        "[bold]Upload DistantHorizons Data[/bold]\n\n"
+        "This uploads DistantHorizons LOD data from cold storage.\n"
+        "[green]✓ Server can remain online during this upload.[/green]\n\n"
+        f"[dim]Source: {DH_COLD_STORAGE}/[/dim]",
+        title="[cyan]Cold Storage Upload[/cyan]",
+        border_style="cyan"
+    ))
+
+    if not check_sftp_credentials():
+        return False
+
+    # Find local DH files
+    dh_files = []
+    total_size = 0
+
+    for dim_name, remote_dir in DH_DESTINATIONS:
+        dim_path = os.path.join(cold_storage_path, dim_name)
+        if os.path.exists(dim_path):
+            for filename in os.listdir(dim_path):
+                if is_dh_file(filename):
+                    filepath = os.path.join(dim_path, filename)
+                    file_size = os.path.getsize(filepath)
+                    dh_files.append({
+                        'local': filepath,
+                        'remote_dir': remote_dir,
+                        'filename': filename,
+                        'dim': dim_name,
+                        'size': file_size
+                    })
+                    total_size += file_size
+
+    if not dh_files:
+        console.print("[yellow]No DistantHorizons files found in cold storage[/yellow]")
+        return False
+
+    # Display found files
+    table = Table(title="DistantHorizons Files (Cold Storage)", box=box.ROUNDED)
+    table.add_column("Dimension", style="cyan")
+    table.add_column("File", style="white")
+    table.add_column("Size", style="green", justify="right")
+
+    for df in dh_files:
+        table.add_row(df['dim'], df['filename'], format_size(df['size']))
+
+    table.add_row("", "", "", style="dim")
+    table.add_row("[bold]Total[/bold]", f"[bold]{len(dh_files)} files[/bold]", f"[bold]{format_size(total_size)}[/bold]")
+
+    console.print()
+    console.print(table)
+
+    if not auto_confirm:
+        console.print()
+        if not Confirm.ask(f"Upload {format_size(total_size)} to production server?"):
+            console.print("[yellow]Cancelled.[/yellow]")
+            return False
+
+    console.print(f"\n[cyan]Connecting to {SFTP_HOST}:{SFTP_PORT}...[/cyan]")
+
+    ssh, sftp = get_sftp_connection()
+    if not sftp:
+        return False
+
+    console.print("[green]Connected![/green]")
+
+    console.print("\n[bold]Uploading DistantHorizons files...[/bold]\n")
+    start_time = time.time()
+
+    with RichProgressTracker(total_files=len(dh_files), total_size=total_size) as tracker:
+        for df in dh_files:
+            # Ensure remote directory exists
+            try:
+                sftp.stat(df['remote_dir'])
+            except IOError:
+                # Create directory path recursively
+                parts = df['remote_dir'].split('/')
+                current = ""
+                for part in parts:
+                    if part:
+                        current += f"/{part}"
+                        try:
+                            sftp.stat(current)
+                        except IOError:
+                            sftp.mkdir(current)
+
+            remote_path = f"{df['remote_dir']}/{df['filename']}"
+            tracker.start_file(f"{df['dim']}/{df['filename']}", df['size'])
+
+            try:
+                sftp.put(df['local'], remote_path, callback=progress_callback(tracker))
+                tracker.file_complete(success=True)
+            except Exception as e:
+                tracker.file_complete(success=False)
+                console.print(f"[red]Error uploading {df['filename']}: {e}[/red]")
+
+    elapsed = time.time() - start_time
+    sftp.close()
+    ssh.close()
+
+    console.print("\n" + "="*50)
+    console.print("[bold green]✓ DistantHorizons upload complete![/bold green]")
+    console.print(f"\n[cyan]Uploaded {len(dh_files)} files ({format_size(total_size)})[/cyan]")
+    console.print(f"[cyan]Elapsed time: {format_duration(elapsed)}[/cyan]")
     console.print("="*50)
 
     return True
@@ -2033,8 +2640,14 @@ def interactive_menu():
         table.add_row("f", "[green]Fresh World Mode[/green] (new world, all mods)")
         table.add_row("v", "[yellow]Vanilla Debug Mode[/yellow] (new world, Fabric only)")
         table.add_row("", "")
-        table.add_row("", "[dim]── World Management ──[/dim]")
-        table.add_row("3", "[dim]Download Backup (use MCC/server-config.py)[/dim]")
+        table.add_row("", "[dim]── World Sync (Production ↔ Local) ──[/dim]")
+        table.add_row("d", "Download World Data [dim](excludes DistantHorizons)[/dim]")
+        table.add_row("D", "Download World + DH [dim](full download, rare)[/dim]")
+        table.add_row("h", "Download DistantHorizons [dim](to cold storage)[/dim]")
+        table.add_row("u", "[red]Upload World to Production[/red] [dim](server offline)[/dim]")
+        table.add_row("H", "Upload DistantHorizons [dim](server can be online)[/dim]")
+        table.add_row("", "")
+        table.add_row("", "[dim]── Local World Management ──[/dim]")
         table.add_row("4", "Reset Local World (from backup)")
         table.add_row("5", "Delete Fresh World")
         table.add_row("6", "Delete Vanilla World")
@@ -2055,7 +2668,7 @@ def interactive_menu():
         console.print(table)
         console.print()
 
-        choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "p", "f", "v", "l", "c", "b", "m", "o", "r", "s", "q"], default="q")
+        choice = Prompt.ask("Select", choices=["1", "2", "d", "D", "h", "u", "H", "4", "5", "6", "p", "f", "v", "l", "c", "b", "m", "o", "r", "s", "q"], default="q")
 
         if choice == "1":
             start_server()
@@ -2077,10 +2690,24 @@ def interactive_menu():
             switch_to_vanilla_mode()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
-        elif choice == "3":
-            console.print("\n[yellow]This command has moved to MCC/server-config.py[/yellow]")
-            console.print("[cyan]Run from MCC directory:[/cyan]")
-            console.print("  python server-config.py world-download")
+        elif choice == "d":
+            download_world(include_dh=False)
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "D":
+            download_world(include_dh=True)
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "h":
+            download_distant_horizons()
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "u":
+            upload_world()
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+        elif choice == "H":
+            upload_distant_horizons()
             Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
         elif choice == "4":
@@ -2176,6 +2803,20 @@ if __name__ == "__main__":
             clear_mods()
         elif command == "sync-mods":
             sync_mods_full()
+        elif command == "download-world":
+            include_dh = "--include-dh" in sys.argv or "--full" in sys.argv
+            auto_confirm = "-y" in sys.argv or "--yes" in sys.argv
+            no_backup = "--no-backup" in sys.argv
+            download_world(backup_existing=not no_backup, auto_confirm=auto_confirm, include_dh=include_dh)
+        elif command == "download-dh":
+            auto_confirm = "-y" in sys.argv or "--yes" in sys.argv
+            download_distant_horizons(auto_confirm=auto_confirm)
+        elif command == "upload-world":
+            auto_confirm = "-y" in sys.argv or "--yes" in sys.argv
+            upload_world(auto_confirm=auto_confirm)
+        elif command == "upload-dh":
+            auto_confirm = "-y" in sys.argv or "--yes" in sys.argv
+            upload_distant_horizons(auto_confirm=auto_confirm)
         elif command == "version":
             if len(sys.argv) < 3:
                 # No subcommand, show current version
@@ -2216,14 +2857,19 @@ if __name__ == "__main__":
             console.print("  python server-config.py mode fresh       # New world, all mods")
             console.print("  python server-config.py mode vanilla     # New world, Fabric only")
             console.print("")
-            console.print("[yellow]World Management:[/yellow]")
+            console.print("[yellow]World Sync (Production ↔ Local):[/yellow]")
+            console.print("  python server-config.py download-world       # Download world (excludes DH)")
+            console.print("  python server-config.py download-world --full  # Download with DistantHorizons")
+            console.print("  python server-config.py download-dh          # Download DH to cold storage")
+            console.print("  python server-config.py upload-world         # Upload world (server offline)")
+            console.print("  python server-config.py upload-dh            # Upload DH from cold storage")
+            console.print("")
+            console.print("[dim]  Options: -y (skip prompts), --no-backup (skip local backup)[/dim]")
+            console.print("")
+            console.print("[yellow]Local World Management:[/yellow]")
             console.print("  python server-config.py reset-local      # Reset world-local from backup")
             console.print("  python server-config.py reset-world <mode>  # Delete world folders")
             console.print("                                           # (fresh, vanilla, production, local)")
-            console.print("")
-            console.print("[dim]Note: Backup sync commands are in MCC/server-config.py:[/dim]")
-            console.print("[dim]  world-download  - Download production → world-production (backup)[/dim]")
-            console.print("[dim]  world-upload    - Upload world-production → production server[/dim]")
             console.print("")
             console.print("[yellow]Modpack Version:[/yellow]")
             console.print("  python server-config.py version          # Show current MCC version")

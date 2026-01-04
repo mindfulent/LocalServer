@@ -25,6 +25,10 @@ python server-config.py reset-world test   # Delete test world
 python server-config.py clear-mods         # Remove mods (keep Fabric API)
 python server-config.py rcon "say hello"   # Send RCON command
 python server-config.py status             # Show current state
+python server-config.py version            # Show current MCC version
+python server-config.py version list       # List all available versions
+python server-config.py version v0.9.50    # Switch to specific version
+python server-config.py version main       # Return to main branch
 ```
 
 **Setup:** Copy `.env.example` to `.env` and fill in SFTP credentials for world sync.
@@ -88,6 +92,12 @@ LocalServer/
 ├── start-vanilla.bat            # No mods, no packwiz
 ├── server.properties.test       # Test settings (superflat, peaceful)
 ├── server.properties.production # Production settings (normal world)
+├── world-production/            # Downloaded production world (backup)
+├── world-local/                 # Working copy for production mode
+├── distant-horizons-cold/       # Cold storage for DH SQLite files
+│   ├── overworld/
+│   ├── nether/
+│   └── end/
 ├── scripts/
 │   ├── test-version.bat         # Test specific MCC version
 │   ├── validate-release.ps1     # Download + test mrpack
@@ -104,31 +114,86 @@ LocalServer/
 
 ## World Data Sync
 
-Download production world data from Bloom.host for realistic local testing:
+Download/upload production world data from/to Bloom.host:
 
 ```bash
 # Via interactive menu
 python server-config.py
-# Select option 5: Download Production World
+# d = Download world (excludes DH)
+# D = Download world + DistantHorizons (full, rare)
+# h = Download DistantHorizons (to cold storage)
+# u = Upload world (server must be offline)
+# H = Upload DistantHorizons (server can be online)
 
 # Via CLI
-python server-config.py download-world             # Interactive
+python server-config.py download-world             # Download world (excludes DH)
+python server-config.py download-world --full      # Include DistantHorizons
 python server-config.py download-world -y          # Non-interactive
 python server-config.py download-world --no-backup # Skip local backup
+python server-config.py download-dh                # Download DH to cold storage
+python server-config.py upload-world               # Upload world (server offline)
+python server-config.py upload-dh                  # Upload DH from cold storage
 ```
 
 **Requirements:** Configure `.env` with SFTP credentials (see `.env.example`).
 
-**What it does:**
+**DistantHorizons files** are handled separately:
+- Large LOD database files (~1-2GB total across dimensions)
+- Excluded from normal world downloads by default
+- Stored in `distant-horizons-cold/` for cold storage backup
+- Can be uploaded while server is running (not a hard dependency)
+
+**What download-world does:**
 - Downloads `/world/`, `/world_nether/`, `/world_the_end/` from production
+- Excludes DistantHorizons.sqlite files (use `--full` to include)
 - Saves to `world-production/`, `world-production_nether/`, `world-production_the_end/`
 - Backs up existing local world to `world-backup-YYYYMMDD_HHMMSS/`
-- Warns if local server is running (session.lock check)
+- Shows elapsed time on completion
+
+**Standard restore workflow:**
+1. Server offline
+2. `upload-world` - Upload world data
+3. Server back online
+4. `upload-dh` - (Optional) Upload DistantHorizons
 
 **Use cases:**
 - Realistic testing with actual world state
 - Bug reproduction in production environment
 - Offline backup of server world
+
+## Modpack Version Management
+
+Switch between MCC versions to test older releases or validate specific tags:
+
+```bash
+# Via interactive menu
+python server-config.py
+# Select 'l' to list versions, 'c' to change version, 'b' to return to main
+
+# Via CLI
+python server-config.py version              # Show current version
+python server-config.py version list         # List all available versions
+python server-config.py version v0.9.50      # Switch to specific version
+python server-config.py version 0.9.50       # Also works without 'v' prefix
+python server-config.py version main         # Return to main branch
+```
+
+**What it does:**
+- Lists all git tags from MCC repository
+- Checks out the specified tag in MCC
+- Stashes uncommitted changes if present (auto-restores when returning to main)
+- Auto-syncs mods from the selected version
+- Cleans old mrpack files to ensure fresh export
+
+**Workflow to test an older version:**
+1. `python server-config.py version v0.9.45` - Switch MCC to that version
+2. `python server-config.py reset-local` - (Optional) Reset world from backup
+3. `python server-config.py start` - Start server with that version's mods
+
+**Return to latest:**
+```bash
+python server-config.py version main  # Returns to main, offers to restore stashed changes
+```
 
 ## Related Projects
 
